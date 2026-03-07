@@ -155,8 +155,7 @@ func (st *SymbolTable) loadOpenAPI(path string) error {
 			// request body fields
 			if op.RequestBody != nil {
 				if content, ok := op.RequestBody.Content["application/json"]; ok {
-					ref := content.Schema.Ref
-					fields := resolveSchemaFields(ref, schemas)
+					fields := collectSchemaFields(content.Schema, schemas)
 					for _, f := range fields {
 						opSym.RequestFields[f] = true
 					}
@@ -166,8 +165,7 @@ func (st *SymbolTable) loadOpenAPI(path string) error {
 			// response fields (200)
 			if resp, ok := op.Responses["200"]; ok {
 				if content, ok := resp.Content["application/json"]; ok {
-					ref := content.Schema.Ref
-					fields := resolveSchemaFields(ref, schemas)
+					fields := collectSchemaFields(content.Schema, schemas)
 					for _, f := range fields {
 						opSym.ResponseFields[f] = true
 					}
@@ -310,21 +308,24 @@ type openAPIMediaType struct {
 	Schema openAPISchema `yaml:"schema"`
 }
 
-// resolveSchemaFields는 $ref를 따라가서 properties 키 목록을 반환한다.
-func resolveSchemaFields(ref string, schemas map[string]openAPISchema) []string {
-	if ref == "" {
-		return nil
-	}
-	// "#/components/schemas/LoginRequest" → "LoginRequest"
-	name := ref[strings.LastIndex(ref, "/")+1:]
-	schema, ok := schemas[name]
-	if !ok {
-		return nil
-	}
-
+// collectSchemaFields는 인라인 properties와 $ref 모두에서 필드를 수집한다.
+func collectSchemaFields(schema openAPISchema, schemas map[string]openAPISchema) []string {
 	var fields []string
+
+	// 인라인 properties
 	for k := range schema.Properties {
 		fields = append(fields, k)
 	}
+
+	// $ref 해결
+	if schema.Ref != "" {
+		name := schema.Ref[strings.LastIndex(schema.Ref, "/")+1:]
+		if resolved, ok := schemas[name]; ok {
+			for k := range resolved.Properties {
+				fields = append(fields, k)
+			}
+		}
+	}
+
 	return fields
 }

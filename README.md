@@ -9,7 +9,9 @@ specs/service/*.go  →  ssac validate  →  ssac gen  →  artifacts/service/*.
 
 ## Core Idea
 
-Declare the execution flow inside service functions using **10 fixed sequence types**, and let symbolic codegen produce the implementation. No LLM required — runs purely on templates.
+Every sequence follows a binary contract: **succeed → next line, fail → return**. If a block can't follow this contract, it's not a sequence — delegate it to `call`. The 10 types are closed because these are all the service-layer operations that naturally follow this contract.
+
+Declare the execution flow inside service functions using these 10 fixed sequence types, and let symbolic codegen produce the implementation. No LLM required — runs purely on templates.
 
 ```go
 // @sequence get
