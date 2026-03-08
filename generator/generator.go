@@ -246,9 +246,13 @@ type typedRequestParam struct {
 
 // collectTypedRequestParams는 source가 "request"인 파라미터를 수집하고 DDL 타입을 결정한다.
 // pathParamSet에 포함된 파라미터는 함수 인자로 이미 받으므로 제외한다.
+// request 파라미터가 2개 이상이면 JSON body로 간주하여 struct decode 코드를 생성한다.
 func collectTypedRequestParams(seqs []parser.Sequence, st *validator.SymbolTable, pathParamSet map[string]bool) []typedRequestParam {
 	seen := map[string]bool{}
-	var params []typedRequestParam
+	var rawParams []struct {
+		name   string
+		goType string
+	}
 	for _, seq := range seqs {
 		for _, p := range seq.Params {
 			if p.Source != "request" || seen[p.Name] || pathParamSet[p.Name] {
@@ -260,17 +264,77 @@ func collectTypedRequestParams(seqs []parser.Sequence, st *validator.SymbolTable
 			if st != nil {
 				goType = lookupDDLType(p.Name, st)
 			}
-
-			varName := lcFirst(p.Name)
-			code := generateExtractCode(varName, p.Name, goType)
-			params = append(params, typedRequestParam{
-				name:        p.Name,
-				goType:      goType,
-				extractCode: code,
-			})
+			rawParams = append(rawParams, struct {
+				name   string
+				goType string
+			}{p.Name, goType})
 		}
 	}
+
+	// 심볼 테이블이 있고 request 파라미터가 2개 이상이면 JSON body struct decode
+	if st != nil && len(rawParams) >= 2 {
+		return buildJSONBodyParams(rawParams)
+	}
+
+	// 1개 이하면 기존 FormValue 방식
+	var params []typedRequestParam
+	for _, rp := range rawParams {
+		varName := lcFirst(rp.name)
+		code := generateExtractCode(varName, rp.name, rp.goType)
+		params = append(params, typedRequestParam{
+			name:        rp.name,
+			goType:      rp.goType,
+			extractCode: code,
+		})
+	}
 	return params
+}
+
+// buildJSONBodyParams는 JSON body struct decode + 변수 추출 코드를 생성한다.
+// 여러 타입이 사용될 수 있으므로 별도의 typedRequestParam 엔트리로 import 힌트를 추가한다.
+func buildJSONBodyParams(rawParams []struct {
+	name   string
+	goType string
+}) []typedRequestParam {
+	var buf bytes.Buffer
+
+	// struct 정의
+	buf.WriteString("\tvar req struct {\n")
+	for _, rp := range rawParams {
+		jsonTag := toSnakeCase(rp.name)
+		buf.WriteString(fmt.Sprintf("\t\t%s %s `json:\"%s\"`\n", rp.name, rp.goType, jsonTag))
+	}
+	buf.WriteString("\t}\n")
+
+	// decode
+	buf.WriteString("\tif err := json.NewDecoder(r.Body).Decode(&req); err != nil {\n")
+	buf.WriteString("\t\thttp.Error(w, \"invalid request body\", http.StatusBadRequest)\n")
+	buf.WriteString("\t\treturn\n")
+	buf.WriteString("\t}\n")
+
+	// 변수 추출
+	for _, rp := range rawParams {
+		varName := lcFirst(rp.name)
+		buf.WriteString(fmt.Sprintf("\t%s := req.%s\n", varName, rp.name))
+	}
+
+	// 전체 코드를 json_body 엔트리에 담고, time.Time import 힌트도 추가
+	result := []typedRequestParam{{
+		name:        "_json_body",
+		goType:      "json_body",
+		extractCode: buf.String(),
+	}}
+	// time.Time은 struct 필드에 사용되므로 import 필요 (strconv 등은 불필요)
+	for _, rp := range rawParams {
+		if rp.goType == "time.Time" {
+			result = append(result, typedRequestParam{
+				name:   rp.name,
+				goType: rp.goType,
+			})
+			break // 한 번만 추가하면 충분
+		}
+	}
+	return result
 }
 
 // lookupDDLType은 PascalCase 파라미터명을 snake_case로 변환하여 DDL 컬럼 타입을 조회한다.
@@ -337,6 +401,8 @@ func collectImports(seqs []parser.Sequence, typedParams []typedRequestParam) []s
 			seen["strconv"] = true
 		case "time.Time":
 			seen["time"] = true
+		case "json_body":
+			seen["encoding/json"] = true
 		}
 	}
 
@@ -373,9 +439,14 @@ func resolveParam(p parser.Param) string {
 // "ProjectID" (request) → lcFirst → "projectID" (이미 추출된 변수)
 // "project.OwnerEmail" → 그대로
 // "\"리터럴\"" → 그대로
+// "new" → nil (리소스 생성 전 authorize에서 ID가 없음을 의미)
 func resolveParamRef(name string) string {
 	if name == "" {
 		return ""
+	}
+	// "new"는 아직 존재하지 않는 리소스를 의미 → nil
+	if name == "new" {
+		return "nil"
 	}
 	// 따옴표 리터럴은 그대로
 	if strings.HasPrefix(name, `"`) {
@@ -453,7 +524,8 @@ func zeroValueChecks(typeName string) (zeroCheck, existsCheck string) {
 // hasConversionErr는 타입 변환이 있어서 err가 이미 선언되었는지 반환한다.
 func hasConversionErr(params []typedRequestParam) bool {
 	for _, p := range params {
-		if p.goType != "string" {
+		// json_body는 if err := 로 스코프 내 선언이므로 제외
+		if p.goType != "string" && p.goType != "json_body" {
 			return true
 		}
 	}

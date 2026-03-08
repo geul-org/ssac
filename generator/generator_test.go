@@ -167,11 +167,11 @@ func TestGenerateModelInterfaces(t *testing.T) {
 		{"time import", `import "time"`},
 		{"ReservationModel", "type ReservationModel interface"},
 		{"Create with time", "startAt time.Time, endAt time.Time"},
-		{"FindByID", "FindByID(reservationID string) (*Reservation, error)"},
-		{"ListByUserID many+pagination", "ListByUserID(userID string, opts QueryOpts) ([]Reservation, int, error)"},
-		{"UpdateStatus exec", "UpdateStatus(reservationID string) error"},
+		{"FindByID", "FindByID(reservationID int64) (*Reservation, error)"},
+		{"ListByUserID many+pagination", "ListByUserID(userID int64, opts QueryOpts) ([]Reservation, int, error)"},
+		{"UpdateStatus exec", "UpdateStatus(reservationID int64) error"},
 		{"RoomModel", "type RoomModel interface"},
-		{"Room Update", "Update(roomID string, name string, capacity int64, location string) error"},
+		{"Room Update", "Update(roomID int64, name string, capacity int64, location string) error"},
 		{"UserModel", "type UserModel interface"},
 		{"FindByEmail", "FindByEmail(email string) (*User, error)"},
 		{"SessionModel", "type SessionModel interface"},
@@ -220,15 +220,19 @@ func TestGenerateTypedRequestParams(t *testing.T) {
 	}
 	got := string(code)
 
+	// create_reservation: 3개 request param (RoomID, StartAt, EndAt) → JSON body
 	checks := []struct {
 		label string
 		want  string
 	}{
+		{"json import", `"encoding/json"`},
 		{"time import", `"time"`},
-		{"StartAt parse", `time.Parse(time.RFC3339, r.FormValue("StartAt"))`},
-		{"EndAt parse", `time.Parse(time.RFC3339, r.FormValue("EndAt"))`},
-		{"StartAt error", `"StartAt: 유효하지 않은 값"`},
-		{"RoomID string", `roomID := r.FormValue("RoomID")`},
+		{"json body struct", "var req struct"},
+		{"StartAt field", "`json:\"start_at\"`"},
+		{"EndAt field", "`json:\"end_at\"`"},
+		{"json decode", "json.NewDecoder(r.Body).Decode(&req)"},
+		{"startAt var", "startAt := req.StartAt"},
+		{"roomID var", "roomID := req.RoomID"},
 	}
 	for _, c := range checks {
 		if !strings.Contains(got, c.want) {
@@ -236,7 +240,12 @@ func TestGenerateTypedRequestParams(t *testing.T) {
 		}
 	}
 
-	// update_room.go: Capacity는 int64, RoomID는 path param
+	// FormValue는 사용되지 않아야 함 (JSON body 모드)
+	if strings.Contains(got, "r.FormValue") {
+		t.Errorf("JSON body 모드에서 r.FormValue가 사용되면 안 됨\n--- got ---\n%s", got)
+	}
+
+	// update_room.go: RoomID는 path param, Name/Capacity/Location은 JSON body
 	sf2, err := parser.ParseFile(filepath.Join(dummyRoot, "service", "update_room.go"))
 	if err != nil {
 		t.Fatalf("파싱 실패: %v", err)
@@ -252,11 +261,12 @@ func TestGenerateTypedRequestParams(t *testing.T) {
 		label string
 		want  string
 	}{
-		{"strconv import", `"strconv"`},
-		{"Capacity parse", `strconv.ParseInt(r.FormValue("Capacity"), 10, 64)`},
-		{"Capacity error", `"Capacity: 유효하지 않은 값"`},
-		{"400 status", "http.StatusBadRequest"},
+		{"json import", `"encoding/json"`},
 		{"RoomID path param", "func UpdateRoom(w http.ResponseWriter, r *http.Request, roomID int64)"},
+		{"json body struct", "var req struct"},
+		{"Capacity field", "Capacity int64"},
+		{"json decode", "json.NewDecoder(r.Body).Decode(&req)"},
+		{"capacity var", "capacity := req.Capacity"},
 	}
 	for _, c := range checks2 {
 		if !strings.Contains(got2, c.want) {
@@ -264,7 +274,7 @@ func TestGenerateTypedRequestParams(t *testing.T) {
 		}
 	}
 
-	// RoomID는 path param이므로 FormValue 생성 안 됨
+	// RoomID는 path param이므로 FormValue/JSON body에 없어야 함
 	if strings.Contains(got2, `r.FormValue("RoomID")`) {
 		t.Errorf("RoomID는 path param이므로 FormValue가 없어야 함\n--- got ---\n%s", got2)
 	}

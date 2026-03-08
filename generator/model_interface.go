@@ -154,7 +154,7 @@ func deriveInterfaces(usages []modelUsage, st *validator.SymbolTable) []derivedI
 			for _, p := range usage.Params {
 				dp := derivedParam{
 					Name:   resolveParamName(p),
-					GoType: resolveParamType(p, st),
+					GoType: resolveParamType(p, usage.ModelName, st),
 				}
 				dm.Params = append(dm.Params, dp)
 			}
@@ -193,14 +193,35 @@ func resolveParamName(p parser.Param) string {
 }
 
 // resolveParamType은 DDL 컬럼 타입에서 Go 타입을 결정한다.
-func resolveParamType(p parser.Param, st *validator.SymbolTable) string {
+// modelName은 @model에서 추출한 모델명이다 (e.g. "Course").
+func resolveParamType(p parser.Param, modelName string, st *validator.SymbolTable) string {
 	// 리터럴 → string
 	if strings.HasPrefix(p.Name, `"`) {
 		return "string"
 	}
 
-	// DDL에서 타입 추론: PascalCase → snake_case
 	snakeName := toSnakeCase(p.Name)
+
+	// 1. 해당 모델의 테이블에서 직접 조회
+	tableName := toSnakeCase(modelName) + "s"
+	if table, ok := st.DDLTables[tableName]; ok {
+		if goType, ok := table.Columns[snakeName]; ok {
+			return goType
+		}
+	}
+
+	// 2. {Model}ID 패턴: CourseID → courses.id
+	if strings.HasSuffix(p.Name, "ID") {
+		refModel := p.Name[:len(p.Name)-2]
+		refTable := toSnakeCase(refModel) + "s"
+		if table, ok := st.DDLTables[refTable]; ok {
+			if goType, ok := table.Columns["id"]; ok {
+				return goType
+			}
+		}
+	}
+
+	// 3. 전체 테이블 순회
 	for _, table := range st.DDLTables {
 		if goType, ok := table.Columns[snakeName]; ok {
 			return goType
@@ -301,12 +322,20 @@ func hasQueryOpts(st *validator.SymbolTable) bool {
 }
 
 // toSnakeCase는 PascalCase/camelCase를 snake_case로 변환한다.
+// 연속 대문자(ID, URL 등)를 올바르게 처리한다: RoomID → room_id, UserURL → user_url
 func toSnakeCase(s string) string {
 	var result []byte
 	for i, c := range s {
 		if c >= 'A' && c <= 'Z' {
 			if i > 0 {
-				result = append(result, '_')
+				prev := s[i-1]
+				// 이전이 소문자면 무조건 언더스코어
+				if prev >= 'a' && prev <= 'z' {
+					result = append(result, '_')
+				} else if prev >= 'A' && prev <= 'Z' && i+1 < len(s) && s[i+1] >= 'a' && s[i+1] <= 'z' {
+					// 이전도 대문자이고 다음이 소문자면 언더스코어 (e.g. URLParser → url_parser)
+					result = append(result, '_')
+				}
 			}
 			result = append(result, byte(c)+32)
 		} else {
