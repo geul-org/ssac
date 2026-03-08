@@ -8,17 +8,19 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/park-jun-woo/ssac/artifacts/internal/parser"
+	"github.com/geul-org/ssac/artifacts/internal/parser"
+	"github.com/geul-org/ssac/artifacts/internal/validator"
 )
 
 // Generate는 []ServiceFunc를 받아 outDir에 Go 파일을 생성한다.
-func Generate(funcs []parser.ServiceFunc, outDir string) error {
+// st가 non-nil이면 DDL 타입 기반 변환 코드를 생성한다.
+func Generate(funcs []parser.ServiceFunc, outDir string, st *validator.SymbolTable) error {
 	if err := os.MkdirAll(outDir, 0755); err != nil {
 		return fmt.Errorf("출력 디렉토리 생성 실패: %w", err)
 	}
 
 	for _, sf := range funcs {
-		code, err := GenerateFunc(sf)
+		code, err := GenerateFunc(sf, st)
 		if err != nil {
 			return fmt.Errorf("%s 코드 생성 실패: %w", sf.Name, err)
 		}
@@ -32,9 +34,13 @@ func Generate(funcs []parser.ServiceFunc, outDir string) error {
 }
 
 // GenerateFunc는 단일 ServiceFunc의 Go 코드를 생성한다.
-func GenerateFunc(sf parser.ServiceFunc) ([]byte, error) {
+// st가 non-nil이면 DDL 타입 기반 변환 코드를 생성한다.
+func GenerateFunc(sf parser.ServiceFunc, st *validator.SymbolTable) ([]byte, error) {
 	var buf bytes.Buffer
-	imports := collectImports(sf.Sequences)
+
+	// request 파라미터 타입 결정
+	typedParams := collectTypedRequestParams(sf.Sequences, st)
+	imports := collectImports(sf.Sequences, typedParams)
 
 	// package
 	buf.WriteString("package service\n\n")
@@ -51,19 +57,27 @@ func GenerateFunc(sf parser.ServiceFunc) ([]byte, error) {
 	// func signature
 	fmt.Fprintf(&buf, "func %s(w http.ResponseWriter, r *http.Request) {\n", sf.Name)
 
-	// request 파라미터 추출
-	requestParams := collectRequestParams(sf.Sequences)
-	for _, p := range requestParams {
-		fmt.Fprintf(&buf, "\t%s := r.FormValue(%q)\n", lcFirst(p), p)
+	// request 파라미터 추출 (타입 변환 포함)
+	for _, tp := range typedParams {
+		buf.WriteString(tp.extractCode)
 	}
-	if len(requestParams) > 0 {
+	if len(typedParams) > 0 {
 		buf.WriteString("\n")
 	}
 
+	// result 타입 맵 구축 (guard 비교식 결정용)
+	resultTypes := map[string]string{}
+	for _, seq := range sf.Sequences {
+		if seq.Result != nil {
+			resultTypes[seq.Result.Var] = seq.Result.Type
+		}
+	}
+
 	// sequence 블록 생성
-	errDeclared := false
+	// 타입 변환 코드에서 err를 선언했으면 이미 선언된 것으로 처리
+	errDeclared := hasConversionErr(typedParams)
 	for i, seq := range sf.Sequences {
-		data := buildTemplateData(seq, &errDeclared)
+		data := buildTemplateData(seq, &errDeclared, resultTypes)
 
 		tmplName := templateName(seq)
 		var seqBuf bytes.Buffer
@@ -94,7 +108,9 @@ type templateData struct {
 	ParamArgs   string
 	Result      *parser.Result
 	// guard
-	Target string
+	Target      string
+	ZeroCheck   string // "== nil", "== 0", `== ""`, "== false"
+	ExistsCheck string // "!= nil", "> 0", `!= ""`, "== true"
 	// authorize
 	Action   string
 	Resource string
@@ -111,7 +127,7 @@ type templateData struct {
 	Vars []string
 }
 
-func buildTemplateData(seq parser.Sequence, errDeclared *bool) templateData {
+func buildTemplateData(seq parser.Sequence, errDeclared *bool, resultTypes map[string]string) templateData {
 	d := templateData{
 		Message: seq.Message,
 		Result:  seq.Result,
@@ -135,8 +151,12 @@ func buildTemplateData(seq parser.Sequence, errDeclared *bool) templateData {
 	// 파라미터 인자 문자열
 	d.ParamArgs = buildParamArgs(seq.Params)
 
-	// guard 대상
+	// guard 대상 + 타입별 비교식
 	d.Target = seq.Target
+	if seq.Type == parser.SeqGuardNil || seq.Type == parser.SeqGuardExists {
+		typeName := resultTypes[seq.Target]
+		d.ZeroCheck, d.ExistsCheck = zeroValueChecks(typeName)
+	}
 
 	// authorize
 	d.Action = seq.Action
@@ -196,8 +216,86 @@ func templateName(seq parser.Sequence) string {
 	return seq.Type
 }
 
+// typedRequestParam은 request 파라미터의 타입과 추출 코드를 보관한다.
+type typedRequestParam struct {
+	name        string // PascalCase 원본명
+	goType      string // "string", "int64", "time.Time" 등
+	extractCode string // 추출 코드 (줄바꿈 포함)
+}
+
+// collectTypedRequestParams는 source가 "request"인 파라미터를 수집하고 DDL 타입을 결정한다.
+func collectTypedRequestParams(seqs []parser.Sequence, st *validator.SymbolTable) []typedRequestParam {
+	seen := map[string]bool{}
+	var params []typedRequestParam
+	for _, seq := range seqs {
+		for _, p := range seq.Params {
+			if p.Source != "request" || seen[p.Name] {
+				continue
+			}
+			seen[p.Name] = true
+
+			goType := "string"
+			if st != nil {
+				goType = lookupDDLType(p.Name, st)
+			}
+
+			varName := lcFirst(p.Name)
+			code := generateExtractCode(varName, p.Name, goType)
+			params = append(params, typedRequestParam{
+				name:        p.Name,
+				goType:      goType,
+				extractCode: code,
+			})
+		}
+	}
+	return params
+}
+
+// lookupDDLType은 PascalCase 파라미터명을 snake_case로 변환하여 DDL 컬럼 타입을 조회한다.
+func lookupDDLType(paramName string, st *validator.SymbolTable) string {
+	snakeName := toSnakeCase(paramName)
+	for _, table := range st.DDLTables {
+		if goType, ok := table.Columns[snakeName]; ok {
+			return goType
+		}
+	}
+	return "string"
+}
+
+// generateExtractCode는 타입별 request 파라미터 추출 코드를 생성한다.
+func generateExtractCode(varName, paramName, goType string) string {
+	switch goType {
+	case "int64":
+		return fmt.Sprintf("\t%s, err := strconv.ParseInt(r.FormValue(%q), 10, 64)\n"+
+			"\tif err != nil {\n"+
+			"\t\thttp.Error(w, \"%s: 유효하지 않은 값\", http.StatusBadRequest)\n"+
+			"\t\treturn\n"+
+			"\t}\n", varName, paramName, paramName)
+	case "float64":
+		return fmt.Sprintf("\t%s, err := strconv.ParseFloat(r.FormValue(%q), 64)\n"+
+			"\tif err != nil {\n"+
+			"\t\thttp.Error(w, \"%s: 유효하지 않은 값\", http.StatusBadRequest)\n"+
+			"\t\treturn\n"+
+			"\t}\n", varName, paramName, paramName)
+	case "bool":
+		return fmt.Sprintf("\t%s, err := strconv.ParseBool(r.FormValue(%q))\n"+
+			"\tif err != nil {\n"+
+			"\t\thttp.Error(w, \"%s: 유효하지 않은 값\", http.StatusBadRequest)\n"+
+			"\t\treturn\n"+
+			"\t}\n", varName, paramName, paramName)
+	case "time.Time":
+		return fmt.Sprintf("\t%s, err := time.Parse(time.RFC3339, r.FormValue(%q))\n"+
+			"\tif err != nil {\n"+
+			"\t\thttp.Error(w, \"%s: 유효하지 않은 값\", http.StatusBadRequest)\n"+
+			"\t\treturn\n"+
+			"\t}\n", varName, paramName, paramName)
+	default: // string
+		return fmt.Sprintf("\t%s := r.FormValue(%q)\n", varName, paramName)
+	}
+}
+
 // collectImports는 사용된 패키지를 수집한다.
-func collectImports(seqs []parser.Sequence) []string {
+func collectImports(seqs []parser.Sequence, typedParams []typedRequestParam) []string {
 	seen := map[string]bool{
 		"net/http": true, // 항상 사용
 	}
@@ -211,9 +309,18 @@ func collectImports(seqs []parser.Sequence) []string {
 		}
 	}
 
+	for _, tp := range typedParams {
+		switch tp.goType {
+		case "int64", "float64", "bool":
+			seen["strconv"] = true
+		case "time.Time":
+			seen["time"] = true
+		}
+	}
+
 	var imports []string
-	// 표준 라이브러리 먼저
-	order := []string{"encoding/json", "net/http", "golang.org/x/crypto/bcrypt"}
+	// 표준 라이브러리 먼저, 알파벳 순
+	order := []string{"encoding/json", "net/http", "strconv", "time", "golang.org/x/crypto/bcrypt"}
 	for _, imp := range order {
 		if seen[imp] {
 			imports = append(imports, imp)
@@ -222,28 +329,22 @@ func collectImports(seqs []parser.Sequence) []string {
 	return imports
 }
 
-// collectRequestParams는 source가 "request"인 고유 파라미터명을 수집한다.
-func collectRequestParams(seqs []parser.Sequence) []string {
-	seen := map[string]bool{}
-	var params []string
-	for _, seq := range seqs {
-		for _, p := range seq.Params {
-			if p.Source == "request" && !seen[p.Name] {
-				seen[p.Name] = true
-				params = append(params, p.Name)
-			}
-		}
-	}
-	return params
-}
-
 // buildParamArgs는 Param 슬라이스를 함수 호출 인자 문자열로 변환한다.
 func buildParamArgs(params []parser.Param) string {
 	var args []string
 	for _, p := range params {
-		args = append(args, resolveParamRef(p.Name))
+		args = append(args, resolveParam(p))
 	}
 	return strings.Join(args, ", ")
+}
+
+// resolveParam은 Param의 source를 고려하여 Go 표현식으로 변환한다.
+func resolveParam(p parser.Param) string {
+	// 예약어 source → source.Name
+	if p.Source == "currentUser" || p.Source == "config" {
+		return p.Source + "." + p.Name
+	}
+	return resolveParamRef(p.Name)
 }
 
 // resolveParamRef는 파라미터 참조를 Go 표현식으로 변환한다.
@@ -311,6 +412,30 @@ func defaultMessage(seq parser.Sequence) string {
 		return "호출 실패"
 	}
 	return "처리 실패"
+}
+
+// zeroValueChecks는 타입에 따른 guard 비교식을 반환한다.
+func zeroValueChecks(typeName string) (zeroCheck, existsCheck string) {
+	switch typeName {
+	case "int", "int32", "int64", "float64":
+		return "== 0", "> 0"
+	case "bool":
+		return "== false", "== true"
+	case "string":
+		return `== ""`, `!= ""`
+	default:
+		return "== nil", "!= nil"
+	}
+}
+
+// hasConversionErr는 타입 변환이 있어서 err가 이미 선언되었는지 반환한다.
+func hasConversionErr(params []typedRequestParam) bool {
+	for _, p := range params {
+		if p.goType != "string" {
+			return true
+		}
+	}
+	return false
 }
 
 // lcFirst는 첫 글자를 소문자로 변환한다.

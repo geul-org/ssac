@@ -5,9 +5,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/park-jun-woo/ssac/artifacts/internal/generator"
-	"github.com/park-jun-woo/ssac/artifacts/internal/parser"
-	"github.com/park-jun-woo/ssac/artifacts/internal/validator"
+	"github.com/geul-org/ssac/artifacts/internal/generator"
+	"github.com/geul-org/ssac/artifacts/internal/parser"
+	"github.com/geul-org/ssac/artifacts/internal/validator"
 )
 
 func main() {
@@ -28,6 +28,21 @@ func main() {
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		os.Exit(1)
 	}
+}
+
+// printValidationResults는 검증 결과를 출력하고, 에러 유무를 반환한다.
+// WARNING은 출력하되 에러로 간주하지 않는다.
+func printValidationResults(errs []validator.ValidationError) bool {
+	hasError := false
+	for _, e := range errs {
+		if e.IsWarning() {
+			fmt.Fprintf(os.Stderr, "%s\n", e)
+		} else {
+			fmt.Fprintf(os.Stderr, "%s\n", e)
+			hasError = true
+		}
+	}
+	return hasError
 }
 
 func runValidate() {
@@ -55,53 +70,74 @@ func runValidate() {
 		st, stErr := validator.LoadSymbolTable(projectRoot)
 		if stErr == nil {
 			errs := validator.ValidateWithSymbols(funcs, st)
-			if len(errs) == 0 {
-				fmt.Println("validation passed (with symbol table)")
-				return
+			if hasError := printValidationResults(errs); hasError {
+				os.Exit(1)
 			}
-			for _, e := range errs {
-				fmt.Fprintf(os.Stderr, "ERROR: %s\n", e)
-			}
-			os.Exit(1)
+			fmt.Println("validation passed (with symbol table)")
+			return
 		}
 	}
 
 	// 외부 SSOT 없으면 내부 검증만
 	errs := validator.Validate(funcs)
-	if len(errs) == 0 {
-		fmt.Println("validation passed")
-		return
+	if hasError := printValidationResults(errs); hasError {
+		os.Exit(1)
 	}
-
-	for _, e := range errs {
-		fmt.Fprintf(os.Stderr, "ERROR: %s\n", e)
-	}
-	os.Exit(1)
+	fmt.Println("validation passed")
 }
 
 func runGen() {
-	inDir := "specs/backend/service"
-	outDir := "artifacts/backend/internal/service"
+	if len(os.Args) < 4 {
+		fmt.Fprintln(os.Stderr, "usage: ssac gen <service-dir> <out-dir>")
+		os.Exit(1)
+	}
+	inDir := os.Args[2]
+	outDir := os.Args[3]
 
-	funcs, err := parser.ParseDir(inDir)
+	// inDir/service/ 가 있으면 프로젝트 루트로 간주
+	serviceDir := filepath.Join(inDir, "service")
+	projectRoot := inDir
+	if _, err := os.Stat(serviceDir); os.IsNotExist(err) {
+		serviceDir = inDir
+		projectRoot = ""
+	}
+
+	funcs, err := parser.ParseDir(serviceDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "parse error: %v\n", err)
 		os.Exit(1)
 	}
 
-	// validate before generate
-	errs := validator.Validate(funcs)
-	if len(errs) > 0 {
-		for _, e := range errs {
-			fmt.Fprintf(os.Stderr, "ERROR: %s\n", e)
+	// validate before generate (외부 SSOT 있으면 교차 검증)
+	var st *validator.SymbolTable
+	var validationErrs []validator.ValidationError
+	if projectRoot != "" {
+		loaded, stErr := validator.LoadSymbolTable(projectRoot)
+		if stErr == nil {
+			st = loaded
+			validationErrs = validator.ValidateWithSymbols(funcs, st)
 		}
+	}
+	if validationErrs == nil {
+		validationErrs = validator.Validate(funcs)
+	}
+	if hasError := printValidationResults(validationErrs); hasError {
 		fmt.Fprintln(os.Stderr, "validation failed, code generation aborted")
 		os.Exit(1)
 	}
 
-	if err := generator.Generate(funcs, outDir); err != nil {
+	if err := generator.Generate(funcs, outDir, st); err != nil {
 		fmt.Fprintf(os.Stderr, "generate error: %v\n", err)
 		os.Exit(1)
+	}
+
+	// Model interface 파생 생성 (심볼 테이블이 있을 때만)
+	if st != nil {
+		if err := generator.GenerateModelInterfaces(funcs, st, outDir); err != nil {
+			fmt.Fprintf(os.Stderr, "model interface generate error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("generated model interfaces in %s/model\n", outDir)
 	}
 
 	fmt.Printf("generated %d files in %s\n", len(funcs), outDir)

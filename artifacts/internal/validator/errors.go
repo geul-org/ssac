@@ -9,8 +9,18 @@ type ValidationError struct {
 	SeqIndex int    // sequence 인덱스
 	Tag      string // 관련 태그 (e.g. "@model", "@action")
 	Message  string // 에러 메시지
+	Level    string // "ERROR" 또는 "WARNING" (빈 문자열이면 ERROR)
 }
 
 func (e ValidationError) Error() string {
-	return fmt.Sprintf("%s:%s:seq[%d] %s — %s", e.FileName, e.FuncName, e.SeqIndex, e.Tag, e.Message)
+	level := e.Level
+	if level == "" {
+		level = "ERROR"
+	}
+	return fmt.Sprintf("%s: %s:%s:seq[%d] %s — %s", level, e.FileName, e.FuncName, e.SeqIndex, e.Tag, e.Message)
+}
+
+// IsWarning은 이 에러가 경고인지 반환한다.
+func (e ValidationError) IsWarning() bool {
+	return e.Level == "WARNING"
 }

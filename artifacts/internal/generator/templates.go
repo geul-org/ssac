@@ -27,7 +27,7 @@ var templates = template.Must(template.New("").Parse(`
 
 {{- define "guard nil" -}}
 	// guard nil
-	if {{.Target}} == nil {
+	if {{.Target}} {{.ZeroCheck}} {
 		http.Error(w, "{{.Message}}", http.StatusNotFound)
 		return
 	}
@@ -35,7 +35,7 @@ var templates = template.Must(template.New("").Parse(`
 
 {{- define "guard exists" -}}
 	// guard exists
-	if {{.Target}} != nil {
+	if {{.Target}} {{.ExistsCheck}} {
 		http.Error(w, "{{.Message}}", http.StatusConflict)
 		return
 	}

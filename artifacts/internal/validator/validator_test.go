@@ -6,12 +6,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/park-jun-woo/ssac/artifacts/internal/parser"
+	"github.com/geul-org/ssac/artifacts/internal/parser"
 )
 
 func specsDir() string {
 	_, file, _, _ := runtime.Caller(0)
-	return filepath.Join(filepath.Dir(file), "..", "..", "..", "specs", "backend", "service")
+	return filepath.Join(filepath.Dir(file), "..", "..", "test", "fixtures", "backend-service")
 }
 
 func dummyStudyRoot() string {
@@ -318,21 +318,21 @@ func TestLoadSymbolTable(t *testing.T) {
 	// sqlc methods
 	userMethods := []string{"FindByEmail", "FindByID"}
 	for _, m := range userMethods {
-		if !st.Models["User"].Methods[m] {
+		if !st.Models["User"].HasMethod(m) {
 			t.Errorf("User.%s 없음", m)
 		}
 	}
 
 	roomMethods := []string{"FindByID", "Delete", "Update"}
 	for _, m := range roomMethods {
-		if !st.Models["Room"].Methods[m] {
+		if !st.Models["Room"].HasMethod(m) {
 			t.Errorf("Room.%s 없음", m)
 		}
 	}
 
 	resMethods := []string{"FindByID", "FindConflict", "Create", "ListByUserID", "CountByRoomID", "UpdateStatus"}
 	for _, m := range resMethods {
-		if !st.Models["Reservation"].Methods[m] {
+		if !st.Models["Reservation"].HasMethod(m) {
 			t.Errorf("Reservation.%s 없음", m)
 		}
 	}
@@ -398,10 +398,9 @@ func TestValidateWithSymbolsDummyStudy(t *testing.T) {
 	}
 
 	errs := ValidateWithSymbols(funcs, st)
-	if len(errs) != 0 {
-		t.Errorf("dummy-study 외부 검증 실패 (에러 없어야 함):")
-		for _, e := range errs {
-			t.Errorf("  %s", e)
+	for _, e := range errs {
+		if !e.IsWarning() {
+			t.Errorf("dummy-study 외부 검증 실패 (에러 없어야 함): %s", e)
 		}
 	}
 }
@@ -433,7 +432,7 @@ func TestValidateWithSymbolsUnknownModel(t *testing.T) {
 func TestValidateWithSymbolsUnknownMethod(t *testing.T) {
 	st := &SymbolTable{
 		Models: map[string]ModelSymbol{
-			"User": {Methods: map[string]bool{"FindByID": true}},
+			"User": {Methods: map[string]MethodInfo{"FindByID": {}}},
 		},
 		Operations: map[string]OperationSymbol{},
 		Components: map[string]bool{},
@@ -457,7 +456,7 @@ func TestValidateWithSymbolsUnknownMethod(t *testing.T) {
 func TestValidateWithSymbolsMissingRequestField(t *testing.T) {
 	st := &SymbolTable{
 		Models: map[string]ModelSymbol{
-			"User": {Methods: map[string]bool{"FindByID": true}},
+			"User": {Methods: map[string]MethodInfo{"FindByID": {}}},
 		},
 		Operations: map[string]OperationSymbol{
 			"Test": {
@@ -559,7 +558,7 @@ func TestValidationErrorFormat(t *testing.T) {
 		Message:  "누락",
 	}
 	got := e.Error()
-	want := "test.go:DoSomething:seq[2] @model — 누락"
+	want := "ERROR: test.go:DoSomething:seq[2] @model — 누락"
 	if got != want {
 		t.Errorf("Error() = %q, want %q", got, want)
 	}

@@ -15,21 +15,71 @@ import (
 
 // SymbolTable은 외부 SSOT에서 수집한 심볼 정보다.
 type SymbolTable struct {
-	Models     map[string]ModelSymbol     // "User" → {Methods: {"FindByID": true}}
+	Models     map[string]ModelSymbol     // "User" → {Methods: {"FindByID": ...}}
 	Operations map[string]OperationSymbol // "Login" → {RequestFields, ResponseFields}
 	Components map[string]bool            // "notification" → true
 	Funcs      map[string]bool            // "calculateRefund" → true
+	DDLTables  map[string]DDLTable        // "users" → {Columns: {"id": "int64", ...}}
 }
 
 // ModelSymbol은 모델의 메서드 목록이다.
 type ModelSymbol struct {
-	Methods map[string]bool
+	Methods map[string]MethodInfo
+}
+
+// HasMethod는 메서드 존재 여부를 반환한다.
+func (ms ModelSymbol) HasMethod(name string) bool {
+	_, ok := ms.Methods[name]
+	return ok
+}
+
+// MethodInfo는 모델 메서드의 상세 정보다.
+type MethodInfo struct {
+	Cardinality string // "one", "many", "exec"
+}
+
+// DDLTable은 DDL에서 파싱한 테이블 컬럼 정보다.
+type DDLTable struct {
+	Columns map[string]string // snake_case 컬럼명 → Go 타입
 }
 
 // OperationSymbol은 API 엔드포인트의 request/response 필드 목록이다.
 type OperationSymbol struct {
 	RequestFields  map[string]bool
 	ResponseFields map[string]bool
+	XPagination    *XPagination
+	XSort          *XSort
+	XFilter        *XFilter
+	XInclude       *XInclude
+}
+
+// HasQueryOpts는 x- 확장이 하나라도 있는지 반환한다.
+func (op OperationSymbol) HasQueryOpts() bool {
+	return op.XPagination != nil || op.XSort != nil || op.XFilter != nil || op.XInclude != nil
+}
+
+// XPagination은 x-pagination 확장이다.
+type XPagination struct {
+	Style        string `yaml:"style"`
+	DefaultLimit int    `yaml:"defaultLimit"`
+	MaxLimit     int    `yaml:"maxLimit"`
+}
+
+// XSort는 x-sort 확장이다.
+type XSort struct {
+	Allowed   []string `yaml:"allowed"`
+	Default   string   `yaml:"default"`
+	Direction string   `yaml:"direction"`
+}
+
+// XFilter는 x-filter 확장이다.
+type XFilter struct {
+	Allowed []string `yaml:"allowed"`
+}
+
+// XInclude는 x-include 확장이다.
+type XInclude struct {
+	Allowed []string `yaml:"allowed"`
 }
 
 // LoadSymbolTable은 프로젝트 디렉토리에서 심볼 테이블을 구성한다.
@@ -44,8 +94,12 @@ func LoadSymbolTable(root string) (*SymbolTable, error) {
 		Operations: make(map[string]OperationSymbol),
 		Components: make(map[string]bool),
 		Funcs:      make(map[string]bool),
+		DDLTables:  make(map[string]DDLTable),
 	}
 
+	if err := st.loadDDL(filepath.Join(root, "db")); err != nil {
+		return nil, fmt.Errorf("DDL 로드 실패: %w", err)
+	}
 	if err := st.loadSqlcQueries(filepath.Join(root, "db", "queries")); err != nil {
 		return nil, fmt.Errorf("sqlc 쿼리 로드 실패: %w", err)
 	}
@@ -77,7 +131,7 @@ func (st *SymbolTable) loadSqlcQueries(dir string) error {
 		}
 
 		modelName := sqlFileToModel(entry.Name())
-		ms := ModelSymbol{Methods: make(map[string]bool)}
+		ms := ModelSymbol{Methods: make(map[string]MethodInfo)}
 
 		f, err := os.Open(filepath.Join(dir, entry.Name()))
 		if err != nil {
@@ -90,8 +144,12 @@ func (st *SymbolTable) loadSqlcQueries(dir string) error {
 			// -- name: FindByID :one
 			if strings.HasPrefix(line, "-- name:") {
 				parts := strings.Fields(line)
-				if len(parts) >= 3 {
-					ms.Methods[parts[2]] = true
+				if len(parts) >= 4 {
+					ms.Methods[parts[2]] = MethodInfo{
+						Cardinality: strings.TrimPrefix(parts[3], ":"),
+					}
+				} else if len(parts) >= 3 {
+					ms.Methods[parts[2]] = MethodInfo{}
 				}
 			}
 		}
@@ -145,6 +203,10 @@ func (st *SymbolTable) loadOpenAPI(path string) error {
 			opSym := OperationSymbol{
 				RequestFields:  make(map[string]bool),
 				ResponseFields: make(map[string]bool),
+				XPagination:    op.XPagination,
+				XSort:          op.XSort,
+				XFilter:        op.XFilter,
+				XInclude:       op.XInclude,
 			}
 
 			// path/query parameters
@@ -218,11 +280,11 @@ func (st *SymbolTable) loadGoInterfaces(dir string) error {
 					st.Components[componentName] = true
 
 					// interface의 메서드도 Models에 등록
-					ms := ModelSymbol{Methods: make(map[string]bool)}
+					ms := ModelSymbol{Methods: make(map[string]MethodInfo)}
 					iface := ts.Type.(*ast.InterfaceType)
 					for _, method := range iface.Methods.List {
 						if len(method.Names) > 0 {
-							ms.Methods[method.Names[0].Name] = true
+							ms.Methods[method.Names[0].Name] = MethodInfo{}
 						}
 					}
 					if len(ms.Methods) > 0 {
@@ -285,10 +347,14 @@ func (p openAPIPathItem) operations() []*openAPIOperation {
 }
 
 type openAPIOperation struct {
-	OperationID string                       `yaml:"operationId"`
-	Parameters  []openAPIParameter           `yaml:"parameters"`
-	RequestBody *openAPIRequestBody          `yaml:"requestBody"`
-	Responses   map[string]openAPIResponse   `yaml:"responses"`
+	OperationID string                     `yaml:"operationId"`
+	Parameters  []openAPIParameter         `yaml:"parameters"`
+	RequestBody *openAPIRequestBody        `yaml:"requestBody"`
+	Responses   map[string]openAPIResponse `yaml:"responses"`
+	XPagination *XPagination               `yaml:"x-pagination"`
+	XSort       *XSort                     `yaml:"x-sort"`
+	XFilter     *XFilter                   `yaml:"x-filter"`
+	XInclude    *XInclude                  `yaml:"x-include"`
 }
 
 type openAPIParameter struct {
@@ -306,6 +372,110 @@ type openAPIResponse struct {
 
 type openAPIMediaType struct {
 	Schema openAPISchema `yaml:"schema"`
+}
+
+// loadDDL은 db/ 디렉토리의 DDL .sql 파일에서 CREATE TABLE 문의 컬럼 타입을 추출한다.
+func (st *SymbolTable) loadDDL(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+			continue
+		}
+
+		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			return err
+		}
+
+		parseDDLTables(string(data), st.DDLTables)
+	}
+	return nil
+}
+
+// parseDDLTables는 CREATE TABLE 문에서 컬럼명과 타입을 추출한다.
+func parseDDLTables(content string, tables map[string]DDLTable) {
+	lines := strings.Split(content, "\n")
+	var currentTable string
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		upper := strings.ToUpper(line)
+
+		// CREATE TABLE tablename (
+		if strings.HasPrefix(upper, "CREATE TABLE") {
+			parts := strings.Fields(line)
+			for i, p := range parts {
+				pu := strings.ToUpper(p)
+				if pu == "TABLE" && i+1 < len(parts) {
+					currentTable = strings.Trim(parts[i+1], "( ")
+					tables[currentTable] = DDLTable{Columns: make(map[string]string)}
+					break
+				}
+			}
+			continue
+		}
+
+		if currentTable == "" {
+			continue
+		}
+
+		// 테이블 정의 종료
+		if strings.HasPrefix(line, ")") {
+			currentTable = ""
+			continue
+		}
+
+		// 컬럼 라인: column_name TYPE ...
+		if strings.HasPrefix(upper, "PRIMARY") || strings.HasPrefix(upper, "UNIQUE") ||
+			strings.HasPrefix(upper, "FOREIGN") || strings.HasPrefix(upper, "CONSTRAINT") ||
+			strings.HasPrefix(upper, "CHECK") || line == "" {
+			continue
+		}
+
+		parts := strings.Fields(line)
+		if len(parts) < 2 {
+			continue
+		}
+
+		colName := parts[0]
+		colType := strings.ToUpper(parts[1])
+		// 쉼표 제거
+		colType = strings.TrimSuffix(colType, ",")
+
+		goType := pgTypeToGo(colType)
+		if t, ok := tables[currentTable]; ok {
+			t.Columns[colName] = goType
+		}
+	}
+}
+
+// pgTypeToGo는 PostgreSQL 타입을 Go 타입으로 매핑한다.
+func pgTypeToGo(pgType string) string {
+	switch pgType {
+	case "BIGINT", "BIGSERIAL", "INTEGER", "SERIAL", "INT", "SMALLINT":
+		return "int64"
+	case "VARCHAR", "TEXT", "UUID", "CHAR":
+		return "string"
+	case "BOOLEAN", "BOOL":
+		return "bool"
+	case "TIMESTAMPTZ", "TIMESTAMP", "DATE":
+		return "time.Time"
+	case "NUMERIC", "DECIMAL", "REAL", "FLOAT", "DOUBLE":
+		return "float64"
+	default:
+		// VARCHAR(255) 같은 경우
+		if strings.HasPrefix(pgType, "VARCHAR") || strings.HasPrefix(pgType, "CHAR") {
+			return "string"
+		}
+		return "string"
+	}
 }
 
 // collectSchemaFields는 인라인 properties와 $ref 모두에서 필드를 수집한다.

@@ -84,9 +84,9 @@ func CreateSession(w http.ResponseWriter, r *http.Request) {
 ```bash
 go build -o ssac ./artifacts/cmd/ssac
 
-ssac parse [dir]       # Print parsed sequence structure
-ssac validate [dir]    # Internal + external SSOT cross-validation
-ssac gen               # validate → codegen → gofmt
+ssac parse [dir]              # Print parsed sequence structure
+ssac validate [dir]           # Internal + external SSOT cross-validation
+ssac gen <service-dir> <out>  # validate → codegen → gofmt
 ```
 
 ## Validation
@@ -100,11 +100,50 @@ External SSOT cross-validation (when project structure detected):
 - Model/method existence (sqlc queries, Go interface)
 - Request/response field existence (OpenAPI)
 - Component/func existence (Go interface)
+- Stale data warning: put/delete followed by response without re-fetch (WARNING level)
 
 ```bash
 ssac validate specs/dummy-study      # With external validation
 ssac validate specs/backend/service  # Internal validation only
 ```
+
+## Code Generation Features
+
+When external SSOT (symbol table) is available, `ssac gen` adds:
+- **Type conversion**: DDL column types → `strconv.ParseInt`, `time.Parse` with 400 Bad Request early return
+- **Guard value types**: Type-aware zero checks (`int` → `== 0`/`> 0`, pointer → `== nil`/`!= nil`)
+- **Source resolution**: `@param Name currentUser` → `currentUser.Name`
+- **Model interface derivation**: Crosses 3 SSOT sources → `<outDir>/model/models_gen.go`
+  - sqlc: method names + cardinality (`:one`→`*T`, `:many`→`[]T`, `:exec`→`error`)
+  - SSaC: business parameters (only methods actually used)
+  - OpenAPI x-extensions → `opts QueryOpts` parameter added to model methods
+
+## OpenAPI x- Extensions
+
+Infrastructure parameters (pagination, sorting, filtering, relation includes) are declared in OpenAPI `x-` extensions, not in SSaC specs. SSaC only declares business parameters. The codegen reads `x-` and automatically constructs `QueryOpts`.
+
+```yaml
+/api/reservations:
+  get:
+    operationId: ListReservations
+    x-pagination:                       # style: offset|cursor, defaultLimit, maxLimit
+      style: offset
+      defaultLimit: 20
+      maxLimit: 100
+    x-sort:                             # allowed columns, default, direction
+      allowed: [start_at, created_at]
+      default: start_at
+      direction: desc
+    x-filter:                           # allowed filter columns
+      allowed: [status, room_id]
+    x-include:                          # allowed relation resources
+      allowed: [room, user]
+```
+
+Effects on codegen:
+- Methods with x- get `opts QueryOpts` parameter in model interface
+- `:many` + x-pagination → return type includes total: `([]T, int, error)`
+- `QueryOpts` struct auto-generated in `models_gen.go`
 
 ## Project Structure
 
@@ -113,12 +152,15 @@ specs/                           # Declarations (SSOT)
   backend/service/               #   Example specs
   dummy-study/                   #   Study room reservation demo project
     service/  db/queries/  api/  model/
+  plans/                         #   Implementation plans
 artifacts/                       # Output (code)
   cmd/ssac/                      #   CLI entrypoint
   internal/parser/               #   Comments → []ServiceFunc
   internal/generator/            #   Type-based templates → Go code
+  internal/generator/model_interface.go  # Model interface derivation
   internal/validator/            #   Internal + external validation
-  MANUAL.md                      #   Detailed manual
+  manual-for-human.md            #   Detailed manual
+  manual-for-ai.md               #   Compact AI reference
 ```
 
 ## External Validation Project Layout
@@ -126,8 +168,9 @@ artifacts/                       # Output (code)
 ```
 <project>/
   service/*.go            # Sequence specs
-  db/queries/*.sql        # sqlc queries (-- name: Method :type)
-  api/openapi.yaml        # OpenAPI 3.0 (operationId = function name)
+  db/*.sql                # DDL (CREATE TABLE → column types)
+  db/queries/*.sql        # sqlc queries (-- name: Method :cardinality)
+  api/openapi.yaml        # OpenAPI 3.0 (operationId = function name, x-pagination/sort/filter/include)
   model/*.go              # Go interface (component), func
 ```
 
@@ -137,7 +180,7 @@ artifacts/                       # Output (code)
 go test ./artifacts/internal/... -v
 ```
 
-46 tests: parser 14 + generator 4 + validator 28
+48 tests: parser 14 + generator 6 + validator 28
 
 ## License
 

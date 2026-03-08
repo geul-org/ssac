@@ -1,4 +1,4 @@
-module github.com/park-jun-woo/ssac
+module github.com/geul-org/ssac
 
 go 1.22.2
 

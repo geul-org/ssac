@@ -7,12 +7,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/park-jun-woo/ssac/artifacts/internal/parser"
+	"github.com/geul-org/ssac/artifacts/internal/parser"
+	"github.com/geul-org/ssac/artifacts/internal/validator"
 )
 
 func specsDir() string {
 	_, file, _, _ := runtime.Caller(0)
-	return filepath.Join(filepath.Dir(file), "..", "..", "..", "specs", "backend", "service")
+	return filepath.Join(filepath.Dir(file), "..", "..", "test", "fixtures", "backend-service")
 }
 
 func TestGenerateCreateSession(t *testing.T) {
@@ -21,7 +22,7 @@ func TestGenerateCreateSession(t *testing.T) {
 		t.Fatalf("파싱 실패: %v", err)
 	}
 
-	code, err := GenerateFunc(*sf)
+	code, err := GenerateFunc(*sf, nil)
 	if err != nil {
 		t.Fatalf("코드 생성 실패: %v", err)
 	}
@@ -62,7 +63,7 @@ func TestGenerateDeleteProject(t *testing.T) {
 		t.Fatalf("파싱 실패: %v", err)
 	}
 
-	code, err := GenerateFunc(*sf)
+	code, err := GenerateFunc(*sf, nil)
 	if err != nil {
 		t.Fatalf("코드 생성 실패: %v", err)
 	}
@@ -79,7 +80,7 @@ func TestGenerateDeleteProject(t *testing.T) {
 		{"get project", "projectModel.FindByID(projectID)"},
 		{"guard nil project", "if project == nil"},
 		{"get sessionCount", "sessionModel.CountByProjectID(projectID)"},
-		{"guard exists", "if sessionCount != nil"},
+		{"guard exists", "if sessionCount > 0"},
 		{"guard exists msg", "하위 세션이 존재하여 삭제할 수 없습니다"},
 		{"call component", "notification"},
 		{"call func", "cleanupProjectResources(project)"},
@@ -99,7 +100,7 @@ func TestGenerateGofmt(t *testing.T) {
 		t.Fatalf("파싱 실패: %v", err)
 	}
 
-	code, err := GenerateFunc(*sf)
+	code, err := GenerateFunc(*sf, nil)
 	if err != nil {
 		t.Fatalf("코드 생성 실패: %v", err)
 	}
@@ -117,7 +118,7 @@ func TestGenerateDir(t *testing.T) {
 	}
 
 	outDir := t.TempDir()
-	if err := Generate(funcs, outDir); err != nil {
+	if err := Generate(funcs, outDir, nil); err != nil {
 		t.Fatalf("Generate 실패: %v", err)
 	}
 
@@ -126,6 +127,139 @@ func TestGenerateDir(t *testing.T) {
 		path := filepath.Join(outDir, sf.FileName)
 		if _, err := readFile(path); err != nil {
 			t.Errorf("파일 생성 안 됨: %s", path)
+		}
+	}
+}
+
+func TestGenerateModelInterfaces(t *testing.T) {
+	_, file, _, _ := runtime.Caller(0)
+	dummyRoot := filepath.Join(filepath.Dir(file), "..", "..", "..", "specs", "dummy-study")
+
+	funcs, err := parser.ParseDir(filepath.Join(dummyRoot, "service"))
+	if err != nil {
+		t.Fatalf("파싱 실패: %v", err)
+	}
+
+	st, err := validator.LoadSymbolTable(dummyRoot)
+	if err != nil {
+		t.Fatalf("심볼 테이블 로드 실패: %v", err)
+	}
+
+	outDir := filepath.Join(filepath.Dir(file), "..", "..", "..", "artifacts", "test", "model_iface_test")
+	os.MkdirAll(outDir, 0755)
+	defer os.RemoveAll(outDir)
+
+	if err := GenerateModelInterfaces(funcs, st, outDir); err != nil {
+		t.Fatalf("모델 인터페이스 생성 실패: %v", err)
+	}
+
+	code, err := os.ReadFile(filepath.Join(outDir, "model", "models_gen.go"))
+	if err != nil {
+		t.Fatalf("생성된 파일 읽기 실패: %v", err)
+	}
+	got := string(code)
+
+	checks := []struct {
+		label string
+		want  string
+	}{
+		{"package", "package model"},
+		{"time import", `import "time"`},
+		{"ReservationModel", "type ReservationModel interface"},
+		{"Create with time", "startAt time.Time, endAt time.Time"},
+		{"FindByID", "FindByID(reservationID string) (*Reservation, error)"},
+		{"ListByUserID many", "ListByUserID(userID string) ([]Reservation, error)"},
+		{"UpdateStatus exec", "UpdateStatus(reservationID string) error"},
+		{"RoomModel", "type RoomModel interface"},
+		{"Room Update", "Update(roomID string, name string, capacity int64, location string) error"},
+		{"UserModel", "type UserModel interface"},
+		{"FindByEmail", "FindByEmail(email string) (*User, error)"},
+		{"SessionModel", "type SessionModel interface"},
+		// dot notation params (user.ID) should NOT appear in interface
+		{"no dot notation", "Create() (*Token, error)"},
+	}
+
+	// SSaC에서 사용되지 않는 메서드는 포함되면 안 됨
+	negChecks := []struct {
+		label  string
+		reject string
+	}{
+		{"unused ListAll", "ListAll("},
+	}
+
+	for _, c := range checks {
+		if !strings.Contains(got, c.want) {
+			t.Errorf("[%s] %q 없음\n--- got ---\n%s", c.label, c.want, got)
+		}
+	}
+	for _, c := range negChecks {
+		if strings.Contains(got, c.reject) {
+			t.Errorf("[%s] %q가 포함되면 안 됨", c.label, c.reject)
+		}
+	}
+}
+
+func TestGenerateTypedRequestParams(t *testing.T) {
+	_, file, _, _ := runtime.Caller(0)
+	dummyRoot := filepath.Join(filepath.Dir(file), "..", "..", "..", "specs", "dummy-study")
+
+	st, err := validator.LoadSymbolTable(dummyRoot)
+	if err != nil {
+		t.Fatalf("심볼 테이블 로드 실패: %v", err)
+	}
+
+	// create_reservation.go: StartAt, EndAt은 time.Time
+	sf, err := parser.ParseFile(filepath.Join(dummyRoot, "service", "create_reservation.go"))
+	if err != nil {
+		t.Fatalf("파싱 실패: %v", err)
+	}
+
+	code, err := GenerateFunc(*sf, st)
+	if err != nil {
+		t.Fatalf("코드 생성 실패: %v", err)
+	}
+	got := string(code)
+
+	checks := []struct {
+		label string
+		want  string
+	}{
+		{"time import", `"time"`},
+		{"StartAt parse", `time.Parse(time.RFC3339, r.FormValue("StartAt"))`},
+		{"EndAt parse", `time.Parse(time.RFC3339, r.FormValue("EndAt"))`},
+		{"StartAt error", `"StartAt: 유효하지 않은 값"`},
+		{"RoomID string", `roomID := r.FormValue("RoomID")`},
+	}
+	for _, c := range checks {
+		if !strings.Contains(got, c.want) {
+			t.Errorf("[%s] %q 없음\n--- got ---\n%s", c.label, c.want, got)
+		}
+	}
+
+	// update_room.go: Capacity는 int64
+	sf2, err := parser.ParseFile(filepath.Join(dummyRoot, "service", "update_room.go"))
+	if err != nil {
+		t.Fatalf("파싱 실패: %v", err)
+	}
+
+	code2, err := GenerateFunc(*sf2, st)
+	if err != nil {
+		t.Fatalf("코드 생성 실패: %v", err)
+	}
+	got2 := string(code2)
+
+	checks2 := []struct {
+		label string
+		want  string
+	}{
+		{"strconv import", `"strconv"`},
+		{"Capacity parse", `strconv.ParseInt(r.FormValue("Capacity"), 10, 64)`},
+		{"Capacity error", `"Capacity: 유효하지 않은 값"`},
+		{"400 status", "http.StatusBadRequest"},
+	}
+	for _, c := range checks2 {
+		if !strings.Contains(got2, c.want) {
+			t.Errorf("[%s] %q 없음\n--- got ---\n%s", c.label, c.want, got2)
 		}
 	}
 }

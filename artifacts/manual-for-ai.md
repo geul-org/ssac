@@ -3,9 +3,9 @@
 ## CLI
 
 ```
-ssac parse [dir]      # 주석 파싱 결과 출력 (기본: specs/backend/service/)
-ssac validate [dir]   # 내부 검증 또는 외부 SSOT 교차 검증 (자동 감지)
-ssac gen              # validate → codegen → gofmt
+ssac parse [dir]              # 주석 파싱 결과 출력 (기본: specs/backend/service/)
+ssac validate [dir]           # 내부 검증 또는 외부 SSOT 교차 검증 (자동 감지)
+ssac gen <service-dir> <out>  # validate → codegen → gofmt (심볼 테이블 있으면 타입 변환 + 모델 인터페이스 생성)
 ```
 
 ## 기술 스택
@@ -44,13 +44,14 @@ specs/                           # 선언 (입력, SSOT)
   backend/service/               #   기존 예시 spec
   dummy-study/                   #   스터디룸 예약 더미 프로젝트
     service/  db/queries/  api/  model/
+  plans/                         #   구현 계획서
 artifacts/                       # 산출 (출력, 코드)
   cmd/ssac/main.go               #   CLI 진입점
   internal/parser/               #   Phase1: 주석 → []ServiceFunc
   internal/generator/            #   Phase2: 타입별 템플릿 → Go 코드
+  internal/generator/model_interface.go  # 모델 인터페이스 파생 생성
   internal/validator/            #   Phase3: 내부 + 외부 SSOT 검증
-  backend/internal/service/      #   생성된 Go 코드
-  MANUAL.md                      #   상세 매뉴얼
+  manual-for-human.md            #   상세 매뉴얼
 files/                           # 기초 자료
   SSaC.md                        #   기획서
 ```
@@ -59,9 +60,50 @@ files/                           # 기초 자료
 
 `ssac validate <project-root>` 시 자동 감지:
 - `<root>/service/*.go` — sequence spec
-- `<root>/db/queries/*.sql` — sqlc 쿼리 (파일명→모델, `-- name:`→메서드)
-- `<root>/api/openapi.yaml` — OpenAPI 3.0 (operationId=함수명)
+- `<root>/db/*.sql` — DDL (CREATE TABLE → 컬럼 타입)
+- `<root>/db/queries/*.sql` — sqlc 쿼리 (파일명→모델, `-- name: Method :cardinality`)
+- `<root>/api/openapi.yaml` — OpenAPI 3.0 (operationId=함수명, x-pagination/sort/filter/include)
 - `<root>/model/*.go` — Go interface→component, func→@func
+
+## 코드젠 기능
+
+심볼 테이블(외부 SSOT)이 있을 때 추가되는 기능:
+
+- **타입 변환**: DDL 컬럼 타입 기반 request 파라미터 변환 (int64→`strconv.ParseInt`, time.Time→`time.Parse`, 실패 시 400 early return)
+- **Guard 값 타입**: result 타입에 따른 zero value 비교 (int→`== 0`/`> 0`, pointer→`== nil`/`!= nil`)
+- **currentUser/config source**: `@param Name currentUser` → `currentUser.Name`
+- **Stale 데이터 경고**: put/delete 후 갱신 없이 response 사용 시 WARNING
+- **모델 인터페이스 파생**: 3 SSOT 교차 → `<outDir>/model/models_gen.go`
+  - sqlc: 메서드명, 카디널리티 (:one→`*T`, :many→`[]T`, :exec→`error`)
+  - SSaC: 비즈니스 파라미터 (실제 사용된 메서드만 포함)
+  - OpenAPI x-: 인프라 파라미터 (x-pagination → `opts QueryOpts` 추가)
+
+## OpenAPI x- 확장
+
+OpenAPI 엔드포인트에 인프라 파라미터를 선언한다. SSaC spec에는 비즈니스 파라미터만 선언하고, 인프라 파라미터는 x-에만 선언한다.
+
+```yaml
+/api/reservations:
+  get:
+    operationId: ListReservations
+    x-pagination:                    # 페이지네이션
+      style: offset                  # offset | cursor
+      defaultLimit: 20
+      maxLimit: 100
+    x-sort:                          # 정렬
+      allowed: [start_at, created_at]
+      default: start_at
+      direction: desc                # asc | desc
+    x-filter:                        # 필터
+      allowed: [status, room_id]
+    x-include:                       # 관계 포함
+      allowed: [room, user]
+```
+
+코드젠 영향:
+- x- 있는 operation의 모델 메서드에 `opts QueryOpts` 파라미터 추가
+- `:many` + x-pagination → 반환 타입에 total count 포함: `([]T, int, error)`
+- `QueryOpts` struct 자동 생성 (Limit, Offset, Cursor, SortCol, SortDir, Filters, Includes)
 
 ## Coding Conventions
 

@@ -66,9 +66,11 @@ ssac validate specs/dummy-study       # 외부 SSOT 교차 검증 (자동 감지
 ### gen
 
 validate → 코드 생성 → gofmt. 검증 실패 시 코드 생성을 중단한다.
+프로젝트 루트에 외부 SSOT가 있으면 타입 변환 코드와 모델 인터페이스도 함께 생성한다.
 
 ```bash
-ssac gen   # specs/backend/service/ → artifacts/backend/internal/service/
+ssac gen <service-dir> <out-dir>
+ssac gen specs/dummy-study artifacts/test/dummy-out
 ```
 
 ---
@@ -184,9 +186,9 @@ func (순수 함수):
 
 | source | 의미 | 코드젠 결과 |
 |---|---|---|
-| `request` | HTTP 요청 파라미터 | `r.FormValue("Name")` |
-| `currentUser` | 인증 컨텍스트 (예약어) | `currentUser` |
-| `config` | 환경 설정 (예약어) | `config` |
+| `request` | HTTP 요청 파라미터 | `r.FormValue("Name")` (DDL 타입에 따라 변환 코드 추가) |
+| `currentUser` | 인증 컨텍스트 (예약어) | `currentUser.Name` |
+| `config` | 환경 설정 (예약어) | `config.Name` |
 | (없음) | 변수 참조 | 변수 그대로 |
 | dot notation | 필드 참조 | `user.Email` 그대로 |
 | `"리터럴"` | 문자열 리터럴 | `"리터럴"` 그대로 |
@@ -222,6 +224,24 @@ func (순수 함수):
   model/            # Go interface, func (*.go)
 ```
 
+### DDL 규칙
+
+`<root>/db/*.sql`의 `CREATE TABLE` 문에서 컬럼 타입을 추출한다.
+
+타입 매핑:
+
+| PostgreSQL | Go |
+|---|---|
+| `BIGINT`, `INTEGER`, `SERIAL`, `BIGSERIAL` | `int64` |
+| `VARCHAR`, `TEXT`, `UUID` | `string` |
+| `BOOLEAN` | `bool` |
+| `TIMESTAMPTZ`, `TIMESTAMP` | `time.Time` |
+| `NUMERIC`, `DECIMAL`, `FLOAT` | `float64` |
+
+request 파라미터의 PascalCase 이름을 snake_case로 변환하여 DDL 컬럼과 매칭한다:
+- `RoomID` → `room_id` → DDL: `BIGINT` → `int64` → `strconv.ParseInt(...)` + 400 early return
+- `StartAt` → `start_at` → DDL: `TIMESTAMPTZ` → `time.Time` → `time.Parse(time.RFC3339, ...)` + 400 early return
+
 ### sqlc 쿼리 규칙
 
 파일명이 모델명이 된다 (복수형 → 단수화 + PascalCase):
@@ -229,10 +249,11 @@ func (순수 함수):
 - `rooms.sql` → `Room`
 - `reservations.sql` → `Reservation`
 
-메서드는 `-- name:` 주석에서 추출:
+메서드는 `-- name:` 주석에서 추출. 카디널리티로 반환 타입이 결정된다:
 ```sql
--- name: FindByID :one
-SELECT * FROM users WHERE id = $1;
+-- name: FindByID :one       → (*User, error)
+-- name: ListByUserID :many  → ([]Reservation, error)
+-- name: UpdateStatus :exec  → error
 ```
 
 ### OpenAPI 규칙
@@ -241,12 +262,154 @@ SELECT * FROM users WHERE id = $1;
 - request body의 `$ref` schema → request 필드
 - path/query parameters → request 필드
 - response 200의 `$ref` schema → response 필드
+- x- 확장 지원 (아래 별도 섹션 참조)
+
+### OpenAPI x- 확장 문법
+
+SSaC에는 비즈니스 파라미터만 선언하고, 페이지네이션/정렬/필터/관계 포함 같은 인프라 파라미터는 OpenAPI x- 확장에 선언한다. 코드젠이 x-를 읽어 자동으로 `QueryOpts`를 구성한다.
+
+#### x-pagination — 페이지네이션
+
+```yaml
+x-pagination:
+  style: offset        # offset | cursor
+  defaultLimit: 20     # 기본 반환 건수
+  maxLimit: 100        # 최대 반환 건수
+```
+
+코드젠 결과:
+```go
+// offset style
+limit := clampLimit(r.URL.Query().Get("limit"), 20, 100)
+offset := parseOffset(r.URL.Query().Get("offset"))
+items, total, err := model.List(userID, QueryOpts{Limit: limit, Offset: offset})
+```
+
+#### x-sort — 정렬
+
+```yaml
+x-sort:
+  allowed: [start_at, created_at]   # 정렬 가능 컬럼
+  default: start_at                 # 기본 정렬 컬럼 (없으면 allowed[0])
+  direction: desc                   # 기본 방향: asc | desc
+```
+
+코드젠 결과:
+```go
+sortCol := validateSort(r.URL.Query().Get("sort"), []string{"start_at", "created_at"}, "start_at")
+sortDir := validateDirection(r.URL.Query().Get("direction"), "desc")
+```
+
+#### x-filter — 필터
+
+```yaml
+x-filter:
+  allowed: [status, room_id]       # 필터 가능 컬럼
+```
+
+코드젠 결과:
+```go
+filters := parseFilters(r.URL.Query(), []string{"status", "room_id"})
+```
+
+#### x-include — 관계 포함
+
+```yaml
+x-include:
+  allowed: [room, user]            # 포함 가능 관계 리소스
+```
+
+코드젠 결과:
+```go
+includes := parseIncludes(r.URL.Query().Get("include"), []string{"room", "user"})
+```
+
+#### 복합 예시
+
+```yaml
+/api/reservations:
+  get:
+    operationId: ListReservations
+    x-pagination:
+      style: offset
+      defaultLimit: 20
+      maxLimit: 100
+    x-sort:
+      allowed: [start_at, created_at]
+      default: start_at
+      direction: desc
+    x-filter:
+      allowed: [status, room_id]
+    x-include:
+      allowed: [room, user]
+```
+
+대응하는 SSaC — 비즈니스 파라미터(`UserID`)만 선언:
+```go
+// @sequence get
+// @model Reservation.ListByUserID
+// @param UserID currentUser
+// @result reservations []Reservation
+
+// @sequence response json
+// @var reservations
+func ListReservations(w http.ResponseWriter, r *http.Request) {}
+```
+
+모델 인터페이스에 미치는 영향:
+- x- 있는 operation의 메서드에 `opts QueryOpts` 파라미터 추가
+- `:many` + x-pagination → 반환 타입: `([]T, int, error)` (total count 포함)
+- `QueryOpts` struct가 `models_gen.go`에 자동 생성됨
 
 ### Go interface 규칙
 
 - interface 타입명 → component (lcFirst: `Notification` → `notification`)
 - interface 메서드 → 모델 메서드로도 등록
 - 패키지 레벨 func → `@func`으로 참조 가능
+
+---
+
+## 모델 인터페이스 파생 생성
+
+`ssac gen`에서 심볼 테이블이 있으면 3가지 SSOT를 교차하여 모델 인터페이스를 `<outDir>/model/models_gen.go`에 생성한다.
+
+교차 규칙:
+- **sqlc**: 메서드명과 카디널리티 (`:one`→포인터, `:many`→슬라이스, `:exec`→error만)
+- **SSaC**: 비즈니스 파라미터명과 타입 (DDL 기반, 실제 사용된 메서드만 포함)
+- **OpenAPI x-**: 인프라 파라미터 (`x-pagination` 있으면 `opts QueryOpts` 추가, `:many`+x-pagination → total count 포함)
+
+생성 예시:
+```go
+package model
+
+import "time"
+
+type ReservationModel interface {
+    Create(userID string, roomID string, startAt time.Time, endAt time.Time) (*Reservation, error)
+    FindByID(reservationID string) (*Reservation, error)
+    ListByUserID(userID string) ([]Reservation, error)
+    UpdateStatus(reservationID string) error
+}
+
+type QueryOpts struct {
+    Limit    int
+    Offset   int
+    Cursor   string
+    SortCol  string
+    SortDir  string
+    Filters  map[string]string
+    Includes []string
+}
+```
+
+### 검증 레벨
+
+| 레벨 | 동작 |
+|---|---|
+| ERROR | 코드 생성 중단, exit code 1 |
+| WARNING | 메시지 출력, 코드 생성 계속 |
+
+WARNING 예시: put/delete 후 갱신 없이 response에서 이전 변수를 사용하면 stale 데이터 경고
 
 ---
 

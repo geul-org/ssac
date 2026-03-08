@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/park-jun-woo/ssac/artifacts/internal/parser"
+	"github.com/geul-org/ssac/artifacts/internal/parser"
 )
 
 // Validate는 []ServiceFunc의 내부 정합성을 검증한다.
@@ -32,6 +32,7 @@ func validateFunc(sf parser.ServiceFunc) []ValidationError {
 	var errs []ValidationError
 	errs = append(errs, validateRequiredFields(sf)...)
 	errs = append(errs, validateVariableFlow(sf)...)
+	errs = append(errs, validateStaleResponse(sf)...)
 	return errs
 }
 
@@ -54,7 +55,7 @@ func validateModel(sf parser.ServiceFunc, st *SymbolTable) []ValidationError {
 			errs = append(errs, ctx.err("@model", fmt.Sprintf("%q 모델을 찾을 수 없습니다", modelName)))
 			continue
 		}
-		if !ms.Methods[methodName] {
+		if !ms.HasMethod(methodName) {
 			errs = append(errs, ctx.err("@model", fmt.Sprintf("%q 모델에 %q 메서드가 없습니다", modelName, methodName)))
 		}
 	}
@@ -228,6 +229,51 @@ func validateVariableFlow(sf parser.ServiceFunc) []ValidationError {
 		// @result로 변수 선언
 		if seq.Result != nil {
 			declared[seq.Result.Var] = true
+		}
+	}
+
+	return errs
+}
+
+// validateStaleResponse는 put/delete 이후 갱신 없이 response에서 사용되는 변수를 경고한다.
+func validateStaleResponse(sf parser.ServiceFunc) []ValidationError {
+	var errs []ValidationError
+
+	// get으로 가져온 변수 → 모델명
+	getVars := map[string]string{}
+	// put/delete로 변경된 모델
+	mutated := map[string]bool{}
+
+	for i, seq := range sf.Sequences {
+		switch seq.Type {
+		case parser.SeqGet:
+			if seq.Result != nil && seq.Model != "" {
+				modelName := strings.SplitN(seq.Model, ".", 2)[0]
+				getVars[seq.Result.Var] = modelName
+				// 재조회: 이 모델의 mutation 플래그 해제
+				mutated[modelName] = false
+			}
+		case parser.SeqPut, parser.SeqDelete:
+			if seq.Model != "" {
+				modelName := strings.SplitN(seq.Model, ".", 2)[0]
+				mutated[modelName] = true
+			}
+		}
+
+		if strings.HasPrefix(seq.Type, "response") {
+			ctx := errCtx{sf.FileName, sf.Name, i}
+			for _, v := range seq.Vars {
+				if modelName, ok := getVars[v]; ok && mutated[modelName] {
+					errs = append(errs, ValidationError{
+						FileName: ctx.fileName,
+						FuncName: ctx.funcName,
+						SeqIndex: ctx.seqIndex,
+						Tag:      "@var",
+						Message:  fmt.Sprintf("%q가 %s 수정 이후 갱신 없이 response에 사용됩니다", v, modelName),
+						Level:    "WARNING",
+					})
+				}
+			}
 		}
 	}
 
