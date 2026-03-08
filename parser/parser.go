@@ -174,8 +174,9 @@ func parseSequenceType(value string) string {
 	return parts[0]
 }
 
-// parseParam은 "@param Name source" 형식을 파싱한다.
+// parseParam은 "@param Name source [-> column]" 형식을 파싱한다.
 // 따옴표로 감싼 리터럴은 하나의 Name으로 취급한다.
+// "-> column"이 있으면 명시적 DDL 컬럼 매핑으로 사용한다.
 func parseParam(value string) Param {
 	// 따옴표로 시작하면 닫는 따옴표까지가 Name
 	if strings.HasPrefix(value, `"`) {
@@ -185,8 +186,15 @@ func parseParam(value string) Param {
 		}
 	}
 
+	// "-> column" 매핑 분리
+	var column string
+	if arrowIdx := strings.Index(value, "->"); arrowIdx >= 0 {
+		column = strings.TrimSpace(value[arrowIdx+2:])
+		value = strings.TrimSpace(value[:arrowIdx])
+	}
+
 	parts := strings.Fields(value)
-	p := Param{Name: parts[0]}
+	p := Param{Name: parts[0], Column: column}
 	if len(parts) > 1 {
 		p.Source = parts[1]
 	}

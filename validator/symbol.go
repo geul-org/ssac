@@ -20,6 +20,7 @@ type SymbolTable struct {
 	Components map[string]bool            // "notification" → true
 	Funcs      map[string]bool            // "calculateRefund" → true
 	DDLTables  map[string]DDLTable        // "users" → {Columns: {"id": "int64", ...}}
+	DTOs       map[string]bool            // "Token" → true (DDL 테이블 없는 순수 DTO)
 }
 
 // ModelSymbol은 모델의 메서드 목록이다.
@@ -110,6 +111,7 @@ func LoadSymbolTable(root string) (*SymbolTable, error) {
 		Components: make(map[string]bool),
 		Funcs:      make(map[string]bool),
 		DDLTables:  make(map[string]DDLTable),
+		DTOs:       make(map[string]bool),
 	}
 
 	if err := st.loadDDL(filepath.Join(root, "db")); err != nil {
@@ -183,7 +185,7 @@ func sqlFileToModel(filename string) string {
 	// 단수화: 간단한 규칙 (es → 제거, s → 제거)
 	if strings.HasSuffix(name, "ies") {
 		name = name[:len(name)-3] + "y"
-	} else if strings.HasSuffix(name, "ses") || strings.HasSuffix(name, "xes") {
+	} else if strings.HasSuffix(name, "sses") || strings.HasSuffix(name, "xes") {
 		name = name[:len(name)-2]
 	} else if strings.HasSuffix(name, "s") {
 		name = name[:len(name)-1]
@@ -283,10 +285,37 @@ func (st *SymbolTable) loadGoInterfaces(dir string) error {
 				continue
 			}
 
+			// GenDecl 또는 TypeSpec의 Doc에서 @dto 감지
+			hasDtoTag := false
+			if gd.Doc != nil {
+				for _, c := range gd.Doc.List {
+					if strings.Contains(c.Text, "@dto") {
+						hasDtoTag = true
+						break
+					}
+				}
+			}
+
 			for _, spec := range gd.Specs {
 				ts, ok := spec.(*ast.TypeSpec)
 				if !ok {
 					continue
+				}
+
+				// TypeSpec 자체의 Doc도 확인
+				if !hasDtoTag && ts.Doc != nil {
+					for _, c := range ts.Doc.List {
+						if strings.Contains(c.Text, "@dto") {
+							hasDtoTag = true
+							break
+						}
+					}
+				}
+
+				// @dto 태그가 있으면 DTO로 등록
+				if hasDtoTag {
+					st.DTOs[ts.Name.Name] = true
+					hasDtoTag = false // 다음 spec을 위해 리셋
 				}
 
 				// interface → component로 등록 (소문자 이름)

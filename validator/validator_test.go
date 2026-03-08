@@ -585,6 +585,58 @@ func TestValidateWithSymbolsUnknownFunc(t *testing.T) {
 	assertContainsError(t, errs, "@func", "unknownFunc")
 }
 
+// --- sqlFileToModel 단수화 ---
+
+func TestSqlFileToModel(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"users.sql", "User"},
+		{"rooms.sql", "Room"},
+		{"reservations.sql", "Reservation"},
+		{"courses.sql", "Course"},       // 수정지시서001: ses → sses 규칙
+		{"resources.sql", "Resource"},    // rses 패턴
+		{"responses.sql", "Response"},    // nses 패턴
+		{"expenses.sql", "Expense"},      // nses 패턴
+		{"addresses.sql", "Address"},     // sses → es 제거
+		{"classes.sql", "Class"},         // sses → es 제거
+		{"buses.sql", "Buse"},            // bus+es는 sses/xes에 해당하지 않아 s만 제거됨
+		{"boxes.sql", "Box"},             // xes → es 제거
+		{"indexes.sql", "Index"},         // xes → es 제거
+		{"categories.sql", "Category"},   // ies → y
+		{"companies.sql", "Company"},     // ies → y
+		{"session.sql", "Session"},       // 단수형 그대로
+	}
+	for _, tc := range cases {
+		got := sqlFileToModel(tc.input)
+		if got != tc.want {
+			t.Errorf("sqlFileToModel(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
+// --- @dto 태그 감지 ---
+
+func TestLoadDTOTag(t *testing.T) {
+	st, err := LoadSymbolTable(dummyStudyRoot())
+	if err != nil {
+		t.Fatalf("심볼 테이블 로드 실패: %v", err)
+	}
+
+	// dummy-study/model에 @dto 태그가 있는 타입 확인
+	for _, name := range []string{"Token", "Refund"} {
+		if !st.DTOs[name] {
+			t.Errorf("DTO %q 등록 안 됨", name)
+		}
+	}
+
+	// Session은 interface이므로 DTO가 아님
+	if st.DTOs["Session"] {
+		t.Error("Session은 DTO가 아니어야 함")
+	}
+}
+
 // --- 에러 메시지 형식 ---
 
 func TestValidationErrorFormat(t *testing.T) {

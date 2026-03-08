@@ -1,5 +1,6 @@
 package model
 
+// @dto
 // Token은 로그인 세션 토큰이다.
 type Token struct {
 	AccessToken string

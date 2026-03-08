@@ -220,11 +220,16 @@ func TestParseParam(t *testing.T) {
 		// 따옴표 리터럴
 		{`"프로젝트가 삭제됩니다"`, Param{Name: `"프로젝트가 삭제됩니다"`}},
 		{`"hello world"`, Param{Name: `"hello world"`}},
+		// -> column 매핑
+		{"PaymentMethod request -> method", Param{Name: "PaymentMethod", Source: "request", Column: "method"}},
+		{"Status request -> status_code", Param{Name: "Status", Source: "request", Column: "status_code"}},
+		// -> 없으면 Column 비어있음
+		{"Name request", Param{Name: "Name", Source: "request", Column: ""}},
 	}
 
 	for _, tt := range tests {
 		got := parseParam(tt.value)
-		if got.Name != tt.want.Name || got.Source != tt.want.Source {
+		if got.Name != tt.want.Name || got.Source != tt.want.Source || got.Column != tt.want.Column {
 			t.Errorf("parseParam(%q) = %+v, want %+v", tt.value, got, tt.want)
 		}
 	}

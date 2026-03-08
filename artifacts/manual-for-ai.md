@@ -17,7 +17,7 @@ Go 1.24+, `go/ast`(파싱), `text/template`(코드젠), `gopkg.in/yaml.v3`(OpenA
 ```go
 // @sequence <type>        — 블록 시작. 10종: authorize|get|guard nil|guard exists|post|put|delete|password|call|response
 // @model <Model.Method>   — 리소스 모델.메서드 (get/post/put/delete)
-// @param <Name> <source>  — source: request, currentUser, 변수명, "리터럴"
+// @param <Name> <source> [-> column]  — source: request, currentUser, 변수명, "리터럴". -> column: 명시적 DDL 컬럼 매핑
 // @result <var> <Type>    — 결과 바인딩 (get/post 필수, call 선택)
 // @message "msg"          — 커스텀 에러 메시지 (선택, 기본값 자동생성)
 // @var <name>             — response에서 반환할 변수
@@ -62,20 +62,25 @@ files/                           # 기초 자료
 - `<root>/db/*.sql` — DDL (CREATE TABLE → 컬럼 타입)
 - `<root>/db/queries/*.sql` — sqlc 쿼리 (파일명→모델, `-- name: Method :cardinality`)
 - `<root>/api/openapi.yaml` — OpenAPI 3.0 (operationId=함수명, x-pagination/sort/filter/include)
-- `<root>/model/*.go` — Go interface→component, func→@func
+- `<root>/model/*.go` — Go interface→component, func→@func, `// @dto`→DDL 테이블 없는 DTO 등록
 
 ## 코드젠 기능
 
 심볼 테이블(외부 SSOT)이 있을 때 추가되는 기능:
 
 - **타입 변환**: DDL 컬럼 타입 기반 request 파라미터 변환 (int64→`strconv.ParseInt`, time.Time→`time.Parse`, 실패 시 400 early return)
+- **`-> column` 매핑**: `@param PaymentMethod request -> method` — 자동 변환 대신 명시적 DDL 컬럼 매핑
 - **Guard 값 타입**: result 타입에 따른 zero value 비교 (int→`== 0`/`> 0`, pointer→`== nil`/`!= nil`)
 - **currentUser/config source**: `@param Name currentUser` → `currentUser.Name`
 - **Stale 데이터 경고**: put/delete 후 갱신 없이 response 사용 시 WARNING
+- **@dto 태그**: `// @dto` 주석이 달린 struct → DDL 테이블 매칭 건너뜀
+- **DDL FK/Index 파싱**: REFERENCES(인라인/독립), CREATE INDEX → `DDLTable.ForeignKeys`, `DDLTable.Indexes`
 - **모델 인터페이스 파생**: 3 SSOT 교차 → `<outDir>/model/models_gen.go`
   - sqlc: 메서드명, 카디널리티 (:one→`*T`, :many→`[]T`, :exec→`error`)
   - SSaC: 비즈니스 파라미터 (실제 사용된 메서드만 포함)
   - OpenAPI x-: 인프라 파라미터 (x-pagination → `opts QueryOpts` 추가)
+
+단수화 규칙 (sqlc 파일명 → 모델명): `ies`→`y`, `sses`→`ss`, `xes`→`x`, 나머지 `s` 제거
 
 ## OpenAPI x- 확장
 

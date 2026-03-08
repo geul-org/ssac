@@ -29,6 +29,7 @@ type Sequence struct {
 type Param struct {
 	Name   string // 파라미터명 (e.g. "ProjectID")
 	Source string // 소스 (e.g. "request", 변수명, 리터럴)
+	Column string // 명시적 DDL 컬럼 매핑 (e.g. "method"), 비어있으면 자동 추론
 }
 
 // Result는 @result 태그의 파싱 결과다.

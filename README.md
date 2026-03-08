@@ -115,8 +115,11 @@ ssac validate specs/backend/service  # Internal validation only
 
 When external SSOT (symbol table) is available, `ssac gen` adds:
 - **Type conversion**: DDL column types → `strconv.ParseInt`, `time.Parse` with 400 Bad Request early return
+- **`-> column` mapping**: `@param PaymentMethod request -> method` — explicit DDL column mapping
 - **Guard value types**: Type-aware zero checks (`int` → `== 0`/`> 0`, pointer → `== nil`/`!= nil`)
 - **Source resolution**: `@param Name currentUser` → `currentUser.Name`
+- **`@dto` tag**: `// @dto` on struct types without DDL tables — skips DDL table matching in cross-validation
+- **DDL FK/Index parsing**: REFERENCES (inline/constraint), CREATE INDEX → available for cross-validation
 - **Model interface derivation**: Crosses 3 SSOT sources → `<outDir>/model/models_gen.go`
   - sqlc: method names + cardinality (`:one`→`*T`, `:many`→`[]T`, `:exec`→`error`)
   - SSaC: business parameters (only methods actually used)
@@ -184,7 +187,7 @@ files/                           # Design documents
 go test ./parser/... ./validator/... ./generator/... -v
 ```
 
-48 tests: parser 14 + generator 6 + validator 28
+50 tests: parser 14 + generator 6 + validator 30
 
 ## License
 

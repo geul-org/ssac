@@ -1,5 +1,6 @@
 package model
 
+// @dto
 // Refund는 환불 계산 결과다.
 type Refund struct {
 	Amount int
