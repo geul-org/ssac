@@ -63,10 +63,17 @@ type Index struct {
 type OperationSymbol struct {
 	RequestFields  map[string]bool
 	ResponseFields map[string]bool
+	PathParams     []PathParam // path parameter (순서 보존)
 	XPagination    *XPagination
 	XSort          *XSort
 	XFilter        *XFilter
 	XInclude       *XInclude
+}
+
+// PathParam은 OpenAPI path parameter다.
+type PathParam struct {
+	Name   string // 원본 이름 (e.g. "CourseID")
+	GoType string // Go 타입 (e.g. "int64")
 }
 
 // HasQueryOpts는 x- 확장이 하나라도 있는지 반환한다.
@@ -229,6 +236,12 @@ func (st *SymbolTable) loadOpenAPI(path string) error {
 			// path/query parameters
 			for _, param := range op.Parameters {
 				opSym.RequestFields[param.Name] = true
+				if param.In == "path" {
+					opSym.PathParams = append(opSym.PathParams, PathParam{
+						Name:   param.Name,
+						GoType: oaTypeToGo(param.Schema.Type, param.Schema.Format),
+					})
+				}
 			}
 
 			// request body fields
@@ -369,6 +382,7 @@ type openAPIComponents struct {
 
 type openAPISchema struct {
 	Type       string                   `yaml:"type"`
+	Format     string                   `yaml:"format"`
 	Properties map[string]openAPISchema `yaml:"properties"`
 	Ref        string                   `yaml:"$ref"`
 }
@@ -402,8 +416,9 @@ type openAPIOperation struct {
 }
 
 type openAPIParameter struct {
-	Name string `yaml:"name"`
-	In   string `yaml:"in"`
+	Name   string          `yaml:"name"`
+	In     string          `yaml:"in"`
+	Schema openAPISchema   `yaml:"schema"`
 }
 
 type openAPIRequestBody struct {
@@ -652,6 +667,23 @@ func pgTypeToGo(pgType string) string {
 		if strings.HasPrefix(pgType, "VARCHAR") || strings.HasPrefix(pgType, "CHAR") {
 			return "string"
 		}
+		return "string"
+	}
+}
+
+// oaTypeToGo는 OpenAPI type+format을 Go 타입으로 변환한다.
+func oaTypeToGo(oaType, format string) string {
+	switch oaType {
+	case "integer":
+		if format == "int64" {
+			return "int64"
+		}
+		return "int"
+	case "number":
+		return "float64"
+	case "boolean":
+		return "bool"
+	default: // string, string+uuid 등
 		return "string"
 	}
 }

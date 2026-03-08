@@ -365,6 +365,23 @@ func TestLoadSymbolTable(t *testing.T) {
 		}
 	}
 
+	// Path parameters
+	getResOp := st.Operations["GetReservation"]
+	if len(getResOp.PathParams) != 1 {
+		t.Fatalf("GetReservation PathParams: got %d, want 1", len(getResOp.PathParams))
+	}
+	if getResOp.PathParams[0].Name != "ReservationID" {
+		t.Errorf("GetReservation PathParams[0].Name: got %q, want %q", getResOp.PathParams[0].Name, "ReservationID")
+	}
+	if getResOp.PathParams[0].GoType != "int64" {
+		t.Errorf("GetReservation PathParams[0].GoType: got %q, want %q", getResOp.PathParams[0].GoType, "int64")
+	}
+
+	// Login has no path params
+	if len(loginOp.PathParams) != 0 {
+		t.Errorf("Login PathParams: got %d, want 0", len(loginOp.PathParams))
+	}
+
 	// Components
 	if !st.Components["notification"] {
 		t.Error("component notification 없음")

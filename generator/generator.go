@@ -38,8 +38,20 @@ func Generate(funcs []parser.ServiceFunc, outDir string, st *validator.SymbolTab
 func GenerateFunc(sf parser.ServiceFunc, st *validator.SymbolTable) ([]byte, error) {
 	var buf bytes.Buffer
 
-	// request 파라미터 타입 결정
-	typedParams := collectTypedRequestParams(sf.Sequences, st)
+	// path parameter 결정
+	var pathParams []validator.PathParam
+	if st != nil {
+		if op, ok := st.Operations[sf.Name]; ok {
+			pathParams = op.PathParams
+		}
+	}
+	pathParamSet := map[string]bool{}
+	for _, pp := range pathParams {
+		pathParamSet[pp.Name] = true
+	}
+
+	// request 파라미터 타입 결정 (path param은 제외)
+	typedParams := collectTypedRequestParams(sf.Sequences, st, pathParamSet)
 	imports := collectImports(sf.Sequences, typedParams)
 
 	// package
@@ -55,9 +67,18 @@ func GenerateFunc(sf parser.ServiceFunc, st *validator.SymbolTable) ([]byte, err
 	}
 
 	// func signature
-	fmt.Fprintf(&buf, "func %s(w http.ResponseWriter, r *http.Request) {\n", sf.Name)
+	sig := "func %s(w http.ResponseWriter, r *http.Request"
+	if len(pathParams) > 0 {
+		var ppArgs []string
+		for _, pp := range pathParams {
+			ppArgs = append(ppArgs, fmt.Sprintf("%s %s", lcFirst(pp.Name), pp.GoType))
+		}
+		sig += ", " + strings.Join(ppArgs, ", ")
+	}
+	sig += ") {\n"
+	fmt.Fprintf(&buf, sig, sf.Name)
 
-	// request 파라미터 추출 (타입 변환 포함)
+	// request 파라미터 추출 (타입 변환 포함, path param 제외)
 	for _, tp := range typedParams {
 		buf.WriteString(tp.extractCode)
 	}
@@ -224,12 +245,13 @@ type typedRequestParam struct {
 }
 
 // collectTypedRequestParams는 source가 "request"인 파라미터를 수집하고 DDL 타입을 결정한다.
-func collectTypedRequestParams(seqs []parser.Sequence, st *validator.SymbolTable) []typedRequestParam {
+// pathParamSet에 포함된 파라미터는 함수 인자로 이미 받으므로 제외한다.
+func collectTypedRequestParams(seqs []parser.Sequence, st *validator.SymbolTable, pathParamSet map[string]bool) []typedRequestParam {
 	seen := map[string]bool{}
 	var params []typedRequestParam
 	for _, seq := range seqs {
 		for _, p := range seq.Params {
-			if p.Source != "request" || seen[p.Name] {
+			if p.Source != "request" || seen[p.Name] || pathParamSet[p.Name] {
 				continue
 			}
 			seen[p.Name] = true

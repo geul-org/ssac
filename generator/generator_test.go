@@ -236,7 +236,7 @@ func TestGenerateTypedRequestParams(t *testing.T) {
 		}
 	}
 
-	// update_room.go: Capacity는 int64
+	// update_room.go: Capacity는 int64, RoomID는 path param
 	sf2, err := parser.ParseFile(filepath.Join(dummyRoot, "service", "update_room.go"))
 	if err != nil {
 		t.Fatalf("파싱 실패: %v", err)
@@ -256,11 +256,80 @@ func TestGenerateTypedRequestParams(t *testing.T) {
 		{"Capacity parse", `strconv.ParseInt(r.FormValue("Capacity"), 10, 64)`},
 		{"Capacity error", `"Capacity: 유효하지 않은 값"`},
 		{"400 status", "http.StatusBadRequest"},
+		{"RoomID path param", "func UpdateRoom(w http.ResponseWriter, r *http.Request, roomID int64)"},
 	}
 	for _, c := range checks2 {
 		if !strings.Contains(got2, c.want) {
 			t.Errorf("[%s] %q 없음\n--- got ---\n%s", c.label, c.want, got2)
 		}
+	}
+
+	// RoomID는 path param이므로 FormValue 생성 안 됨
+	if strings.Contains(got2, `r.FormValue("RoomID")`) {
+		t.Errorf("RoomID는 path param이므로 FormValue가 없어야 함\n--- got ---\n%s", got2)
+	}
+}
+
+func TestGeneratePathParamSignature(t *testing.T) {
+	_, file, _, _ := runtime.Caller(0)
+	dummyRoot := filepath.Join(filepath.Dir(file), "..", "specs", "dummy-study")
+
+	st, err := validator.LoadSymbolTable(dummyRoot)
+	if err != nil {
+		t.Fatalf("심볼 테이블 로드 실패: %v", err)
+	}
+
+	// get_reservation.go: ReservationID는 OpenAPI path param (int64)
+	sf, err := parser.ParseFile(filepath.Join(dummyRoot, "service", "get_reservation.go"))
+	if err != nil {
+		t.Fatalf("파싱 실패: %v", err)
+	}
+
+	code, err := GenerateFunc(*sf, st)
+	if err != nil {
+		t.Fatalf("코드 생성 실패: %v", err)
+	}
+	got := string(code)
+
+	checks := []struct {
+		label string
+		want  string
+	}{
+		{"path param sig", "func GetReservation(w http.ResponseWriter, r *http.Request, reservationID int64)"},
+	}
+
+	negChecks := []struct {
+		label  string
+		reject string
+	}{
+		{"no FormValue for path param", `r.FormValue("ReservationID")`},
+	}
+
+	for _, c := range checks {
+		if !strings.Contains(got, c.want) {
+			t.Errorf("[%s] %q 없음\n--- got ---\n%s", c.label, c.want, got)
+		}
+	}
+	for _, c := range negChecks {
+		if strings.Contains(got, c.reject) {
+			t.Errorf("[%s] %q가 포함되면 안 됨\n--- got ---\n%s", c.label, c.reject, got)
+		}
+	}
+
+	// login.go: path param 없으므로 기존 시그니처 유지
+	sf2, err := parser.ParseFile(filepath.Join(dummyRoot, "service", "login.go"))
+	if err != nil {
+		t.Fatalf("파싱 실패: %v", err)
+	}
+
+	code2, err := GenerateFunc(*sf2, st)
+	if err != nil {
+		t.Fatalf("코드 생성 실패: %v", err)
+	}
+	got2 := string(code2)
+
+	if !strings.Contains(got2, "func Login(w http.ResponseWriter, r *http.Request)") {
+		t.Errorf("Login 시그니처에 path param이 없어야 함\n--- got ---\n%s", got2)
 	}
 }
 
