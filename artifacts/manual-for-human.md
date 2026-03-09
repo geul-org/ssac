@@ -115,7 +115,7 @@ artifacts/service/
 
 기존 flat 구조(`service/*.go`)는 변경 없이 동작한다.
 
-### sequence 타입 (10종)
+### sequence 타입 (11종)
 
 #### authorize — 권한 검증
 
@@ -124,6 +124,7 @@ artifacts/service/
 // @action <action>        // 필수: create, read, update, delete, cancel 등
 // @resource <resource>    // 필수: 리소스명
 // @id <ParamName>         // 필수: 식별자 파라미터
+// @message "커스텀 메시지"  // 선택: Forbidden 메시지 (기본: "권한이 없습니다"). 내부 에러는 "권한 확인 실패" 고정.
 ```
 
 #### get — 리소스 조회
@@ -148,6 +149,24 @@ artifacts/service/
 // @sequence guard exists <target>
 // @message "커스텀 메시지"          // 선택 (기본: "<target>가 이미 존재합니다")
 ```
+
+#### guard state — 상태 전이 검사
+
+```go
+// @sequence guard state <stateDiagramID>   // stateDiagramID: Mermaid stateDiagram 파일 식별자
+// @param <entity>.<StatusField>            // 필수: 상태 필드 (dot notation)
+// @message "커스텀 메시지"                   // 선택 (기본: "상태 전이가 허용되지 않습니다")
+```
+
+함수명이 전이 이벤트로 사용된다. 코드젠 결과:
+```go
+if !coursestate.CanTransition(course.Published, "PublishCourse") {
+    http.Error(w, "상태 전이가 허용되지 않습니다", http.StatusConflict)
+    return
+}
+```
+
+import: `"states/{stateDiagramID}state"` (상태 머신 패키지는 fullend가 생성)
 
 #### post — 리소스 생성
 
@@ -180,6 +199,7 @@ artifacts/service/
 // @sequence password
 // @param <hashField>       // 필수: 해시 (e.g. user.PasswordHash)
 // @param <plainField> <source>  // 필수: 평문 (e.g. Password request)
+// @message "커스텀 메시지"   // 선택 (기본: "비밀번호가 일치하지 않습니다")
 ```
 
 #### call — 외부 호출
@@ -240,7 +260,8 @@ func (순수 함수):
 | delete + Room.Delete | "Room 삭제 실패" |
 | guard nil (project) | "project가 존재하지 않습니다" |
 | guard exists (conflict) | "conflict가 이미 존재합니다" |
-| authorize | "권한 확인 실패" |
+| guard state | "상태 전이가 허용되지 않습니다" |
+| authorize | "권한이 없습니다" (Forbidden), "권한 확인 실패" (내부 에러, 고정) |
 | password | "비밀번호가 일치하지 않습니다" |
 | call @component notify | "notify 호출 실패" |
 | call @func calculate | "calculate 호출 실패" |

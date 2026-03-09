@@ -13,7 +13,7 @@ specs/service/*.go  →  ssac validate  →  ssac gen  →  artifacts/service/*.
 
 Every service function is a sequence of steps. Each step follows a binary contract: **succeed → next line, fail → return**. This is not an abstraction we invented — it's how service logic already works. SSaC makes it explicit.
 
-10 fixed sequence types cover all service-layer operations that follow this contract. If something doesn't fit, delegate it to `call`. The set is closed by design.
+11 fixed sequence types cover all service-layer operations that follow this contract. If something doesn't fit, delegate it to `call`. The set is closed by design.
 
 No LLM, no inference — pure symbolic codegen from templates. The spec is the source of truth.
 
@@ -68,7 +68,7 @@ func CreateSession(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-## Sequence Types (10)
+## Sequence Types (11)
 
 | Type | Role |
 |---|---|
@@ -76,6 +76,7 @@ func CreateSession(w http.ResponseWriter, r *http.Request) {
 | `get` | Resource lookup |
 | `guard nil` | Exit if null |
 | `guard exists` | Exit if exists |
+| `guard state` | State transition check |
 | `post` | Resource creation |
 | `put` | Resource update |
 | `delete` | Resource deletion |
@@ -195,7 +196,7 @@ files/                           # Design documents
 go test ./parser/... ./validator/... ./generator/... -v
 ```
 
-56 tests: parser 15 + generator 9 + validator 32
+60 tests: parser 16 + generator 11 + validator 33
 
 ## License
 

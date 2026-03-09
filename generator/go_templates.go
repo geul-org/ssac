@@ -7,11 +7,11 @@ var goTemplates = template.Must(template.New("").Parse(`
 	// authorize
 	allowed, err := authz.Check(currentUser, "{{.Action}}", "{{.Resource}}", {{.ID}})
 	if err != nil {
-		http.Error(w, "{{.Message}}", http.StatusInternalServerError)
+		http.Error(w, "권한 확인 실패", http.StatusInternalServerError)
 		return
 	}
 	if !allowed {
-		http.Error(w, "권한이 없습니다", http.StatusForbidden)
+		http.Error(w, "{{.Message}}", http.StatusForbidden)
 		return
 	}
 {{end}}

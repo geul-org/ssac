@@ -539,7 +539,7 @@ func defaultMessage(seq parser.Sequence) string {
 	case parser.SeqGuardState:
 		return "상태 전이가 허용되지 않습니다"
 	case parser.SeqAuthorize:
-		return "권한 확인 실패"
+		return "권한이 없습니다"
 	case parser.SeqPassword:
 		return "비밀번호가 일치하지 않습니다"
 	case parser.SeqCall:

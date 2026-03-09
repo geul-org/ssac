@@ -15,7 +15,7 @@ Go 1.24+, `go/ast`(파싱), `text/template`(코드젠), `gopkg.in/yaml.v3`(OpenA
 ## DSL 문법
 
 ```go
-// @sequence <type>        — 블록 시작. 10종: authorize|get|guard nil|guard exists|post|put|delete|password|call|response
+// @sequence <type>        — 블록 시작. 11종: authorize|get|guard nil|guard exists|guard state|post|put|delete|password|call|response
 // @model <Model.Method>   — 리소스 모델.메서드 (get/post/put/delete)
 // @param <Name> <source> [-> column]  — source: request, currentUser, 변수명, "리터럴". -> column: 명시적 DDL 컬럼 매핑
 // @result <var> <Type>    — 결과 바인딩 (get/post 필수, call 선택)
@@ -33,6 +33,7 @@ Go 1.24+, `go/ast`(파싱), `text/template`(코드젠), `gopkg.in/yaml.v3`(OpenA
 | get, post | @model, @result |
 | put, delete | @model |
 | guard nil/exists | target (sequence 라인에 변수명) |
+| guard state | target (stateDiagramID), @param 1개 (entity.Field) |
 | password | @param 2개 (hash, plain) |
 | call | @component 또는 @func (택일) |
 | response | (없음, @var는 선택) |
@@ -87,6 +88,7 @@ files/                           # 기초 자료
   - OpenAPI x-: 인프라 파라미터 (x-pagination → `opts QueryOpts` 추가)
 
 - **도메인 폴더 구조**: `service/auth/login.go` → `Domain="auth"` → `outDir/auth/login.go`, `package auth`. flat 하위 호환.
+- **guard state 코드젠**: `guard state {id}` + `@param entity.Field` → `{id}state.CanTransition(entity.Field, "FuncName")`, import `"states/{id}state"`
 
 단수화 규칙 (sqlc 파일명 → 모델명): `ies`→`y`, `sses`→`ss`, `xes`→`x`, 나머지 `s` 제거
 

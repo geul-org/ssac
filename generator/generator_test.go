@@ -399,6 +399,91 @@ func TestGeneratePathParamSignature(t *testing.T) {
 	}
 }
 
+func TestGenerateCustomMessages(t *testing.T) {
+	// authorize with custom @message → Forbidden 메시지 커스텀
+	sf := parser.ServiceFunc{
+		Name:     "UpdateCourse",
+		FileName: "update_course.go",
+		Sequences: []parser.Sequence{
+			{
+				Type:     parser.SeqAuthorize,
+				Action:   "update",
+				Resource: "course",
+				ID:       "CourseID",
+				Message:  "이 강의를 수정할 권한이 없습니다",
+			},
+			{Type: "response json"},
+		},
+	}
+	code, err := GenerateFunc(sf, nil)
+	if err != nil {
+		t.Fatalf("authorize 코드 생성 실패: %v", err)
+	}
+	got := string(code)
+	if !strings.Contains(got, "이 강의를 수정할 권한이 없습니다") {
+		t.Errorf("authorize 커스텀 메시지 없음\n%s", got)
+	}
+	// 내부 에러는 항상 고정
+	if !strings.Contains(got, "권한 확인 실패") {
+		t.Errorf("authorize 내부 에러 메시지 없음\n%s", got)
+	}
+
+	// password with custom @message
+	sf2 := parser.ServiceFunc{
+		Name:     "Login",
+		FileName: "login.go",
+		Sequences: []parser.Sequence{
+			{
+				Type:    parser.SeqGet,
+				Model:   "User.FindByEmail",
+				Params:  []parser.Param{{Name: "Email", Source: "request"}},
+				Result:  &parser.Result{Var: "user", Type: "User"},
+			},
+			{
+				Type:    parser.SeqPassword,
+				Params:  []parser.Param{{Name: "user.PasswordHash"}, {Name: "Password", Source: "request"}},
+				Message: "비밀번호가 틀렸습니다",
+			},
+			{Type: "response json", Vars: []string{"user"}},
+		},
+	}
+	code2, err := GenerateFunc(sf2, nil)
+	if err != nil {
+		t.Fatalf("password 코드 생성 실패: %v", err)
+	}
+	if !strings.Contains(string(code2), "비밀번호가 틀렸습니다") {
+		t.Errorf("password 커스텀 메시지 없음\n%s", string(code2))
+	}
+
+	// guard state with custom @message
+	sf3 := parser.ServiceFunc{
+		Name:     "PublishCourse",
+		FileName: "publish_course.go",
+		Sequences: []parser.Sequence{
+			{
+				Type:   parser.SeqGet,
+				Model:  "Course.FindByID",
+				Params: []parser.Param{{Name: "CourseID", Source: "request"}},
+				Result: &parser.Result{Var: "course", Type: "Course"},
+			},
+			{
+				Type:    parser.SeqGuardState,
+				Target:  "course",
+				Params:  []parser.Param{{Name: "course.Published"}},
+				Message: "현재 상태에서 공개할 수 없습니다",
+			},
+			{Type: "response json"},
+		},
+	}
+	code3, err := GenerateFunc(sf3, nil)
+	if err != nil {
+		t.Fatalf("guard state 코드 생성 실패: %v", err)
+	}
+	if !strings.Contains(string(code3), "현재 상태에서 공개할 수 없습니다") {
+		t.Errorf("guard state 커스텀 메시지 없음\n%s", string(code3))
+	}
+}
+
 func TestGenerateGuardState(t *testing.T) {
 	sf := parser.ServiceFunc{
 		Name:     "PublishCourse",
