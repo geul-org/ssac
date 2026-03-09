@@ -126,6 +126,8 @@ When external SSOT (symbol table) is available, `ssac gen` adds:
   - sqlc: method names + cardinality (`:one`→`*T`, `:many`→`[]T`, `:exec`→`error`)
   - SSaC: all @param sources included (request, currentUser, dot notation `user.ID`→`userID`, literal `"pending"`→DDL reverse-mapping)
   - OpenAPI x-extensions → `opts QueryOpts` parameter added to model methods
+- **Domain folder structure**: `service/auth/login.go` → outputs to `outDir/auth/login.go` with `package auth`
+  - Flat structure (`service/login.go`) backward compatible (Domain="")
 
 ## OpenAPI x- Extensions
 
@@ -180,7 +182,7 @@ files/                           # Design documents
 
 ```
 <project>/
-  service/*.go            # Sequence specs
+  service/**/*.go         # Sequence specs (recursive, domain folders supported)
   db/*.sql                # DDL (CREATE TABLE → column types)
   db/queries/*.sql        # sqlc queries (-- name: Method :cardinality)
   api/openapi.yaml        # OpenAPI 3.0 (operationId = function name, x-pagination/sort/filter/include)
@@ -193,7 +195,7 @@ files/                           # Design documents
 go test ./parser/... ./validator/... ./generator/... -v
 ```
 
-54 tests: parser 14 + generator 8 + validator 32
+56 tests: parser 15 + generator 9 + validator 32
 
 ## License
 

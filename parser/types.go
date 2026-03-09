@@ -4,6 +4,7 @@ package parser
 type ServiceFunc struct {
 	Name      string     // 함수명 (e.g. "CreateSession")
 	FileName  string     // 원본 파일명 (e.g. "create_session.go")
+	Domain    string     // 도메인 폴더명 (e.g. "auth"). 빈 문자열이면 루트.
 	Sequences []Sequence // 순서 보존된 sequence 리스트
 }
 

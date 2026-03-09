@@ -5,8 +5,8 @@
 SSaC(Service Sequences as Code)는 Go 주석 기반 선언적 서비스 로직을 파싱하여 Go 구현 코드를 생성하는 CLI 도구다.
 
 ```
-specs/service/*.go  →  ssac parse  →  ssac validate  →  ssac gen  →  artifacts/service/*.go
-    (주석 DSL)          (구조체)        (정합성 검증)      (Go 코드)      (gofmt 완료)
+specs/service/**/*.go  →  ssac parse  →  ssac validate  →  ssac gen  →  artifacts/service/**/*.go
+      (주석 DSL)            (구조체)        (정합성 검증)      (Go 코드)      (gofmt 완료)
 ```
 
 ## 설치 & 실행
@@ -89,6 +89,31 @@ func FuncName(w http.ResponseWriter, r *http.Request) {}
 - 하나의 `.go` 파일에 하나의 함수
 - 함수 위에 sequence 블록을 나열 (빈 줄로 구분 가능)
 - `@sequence`가 블록의 시작
+
+### 도메인 폴더 구조
+
+서비스 파일을 도메인별 폴더로 분류할 수 있다. `ParseDir`이 재귀 탐색하여 첫 번째 서브디렉토리를 도메인으로 인식한다.
+
+```
+specs/service/
+├── login.go                  ← flat, Domain="", package service
+├── auth/
+│   └── register.go           ← Domain="auth", package auth
+└── course/
+    └── create_course.go      ← Domain="course", package course
+```
+
+생성 결과:
+```
+artifacts/service/
+├── login.go                  ← package service
+├── auth/
+│   └── register.go           ← package auth
+└── course/
+    └── create_course.go      ← package course
+```
+
+기존 flat 구조(`service/*.go`)는 변경 없이 동작한다.
 
 ### sequence 타입 (10종)
 
@@ -228,7 +253,7 @@ func (순수 함수):
 
 ```
 <project-root>/
-  service/          # sequence 주석 파일 (*.go)
+  service/          # sequence 주석 파일 (*.go, 재귀 탐색, 도메인 폴더 지원)
   db/queries/       # sqlc 쿼리 파일 (*.sql)
   api/openapi.yaml  # OpenAPI 3.0 spec
   model/            # Go interface, func (*.go)

@@ -41,7 +41,12 @@ func GenerateWith(t Target, funcs []parser.ServiceFunc, outDir string, st *valid
 
 		ext := t.FileExtension()
 		outName := strings.TrimSuffix(sf.FileName, ".go") + ext
-		path := filepath.Join(outDir, outName)
+		outPath := outDir
+		if sf.Domain != "" {
+			outPath = filepath.Join(outDir, sf.Domain)
+			os.MkdirAll(outPath, 0755)
+		}
+		path := filepath.Join(outPath, outName)
 		if err := os.WriteFile(path, code, 0644); err != nil {
 			return fmt.Errorf("%s 파일 쓰기 실패: %w", path, err)
 		}

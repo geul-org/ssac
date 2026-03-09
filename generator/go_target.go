@@ -41,7 +41,11 @@ func (g *GoTarget) GenerateFunc(sf parser.ServiceFunc, st *validator.SymbolTable
 	imports := collectImports(sf.Sequences, typedParams)
 
 	// package
-	buf.WriteString("package service\n\n")
+	pkgName := "service"
+	if sf.Domain != "" {
+		pkgName = sf.Domain
+	}
+	buf.WriteString("package " + pkgName + "\n\n")
 
 	// imports
 	if len(imports) > 0 {

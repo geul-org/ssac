@@ -62,7 +62,7 @@ files/                           # 기초 자료
 ## 외부 검증 프로젝트 구조
 
 `ssac validate <project-root>` 시 자동 감지:
-- `<root>/service/*.go` — sequence spec
+- `<root>/service/**/*.go` — sequence spec (재귀 탐색, 도메인 폴더 지원)
 - `<root>/db/*.sql` — DDL (CREATE TABLE → 컬럼 타입)
 - `<root>/db/queries/*.sql` — sqlc 쿼리 (파일명→모델, `-- name: Method :cardinality`)
 - `<root>/api/openapi.yaml` — OpenAPI 3.0 (operationId=함수명, x-pagination/sort/filter/include)
@@ -85,6 +85,8 @@ files/                           # 기초 자료
   - sqlc: 메서드명, 카디널리티 (:one→`*T`, :many→`[]T`, :exec→`error`)
   - SSaC: 모든 @param 소스 포함 (request, currentUser, dot notation `user.ID`→`userID`, 리터럴 `"pending"`→DDL 역매핑)
   - OpenAPI x-: 인프라 파라미터 (x-pagination → `opts QueryOpts` 추가)
+
+- **도메인 폴더 구조**: `service/auth/login.go` → `Domain="auth"` → `outDir/auth/login.go`, `package auth`. flat 하위 호환.
 
 단수화 규칙 (sqlc 파일명 → 모델명): `ies`→`y`, `sses`→`ss`, `xes`→`x`, 나머지 `s` 제거
 

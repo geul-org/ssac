@@ -399,6 +399,63 @@ func TestGeneratePathParamSignature(t *testing.T) {
 	}
 }
 
+func TestGenerateDomain(t *testing.T) {
+	_, file, _, _ := runtime.Caller(0)
+	domainDir := filepath.Join(filepath.Dir(file), "..", "testdata", "domain-service")
+
+	funcs, err := parser.ParseDir(domainDir)
+	if err != nil {
+		t.Fatalf("파싱 실패: %v", err)
+	}
+
+	// Domain 필드 확인
+	var flatFunc, domainFunc *parser.ServiceFunc
+	for i := range funcs {
+		if funcs[i].Domain == "" {
+			flatFunc = &funcs[i]
+		} else if funcs[i].Domain == "course" {
+			domainFunc = &funcs[i]
+		}
+	}
+	if flatFunc == nil || domainFunc == nil {
+		t.Fatal("flat 또는 domain 함수를 찾지 못함")
+	}
+
+	// flat: package service
+	code, err := GenerateFunc(*flatFunc, nil)
+	if err != nil {
+		t.Fatalf("flat 코드 생성 실패: %v", err)
+	}
+	if !strings.Contains(string(code), "package service") {
+		t.Errorf("flat 함수인데 package service가 아님\n%s", string(code))
+	}
+
+	// domain: package course
+	code2, err := GenerateFunc(*domainFunc, nil)
+	if err != nil {
+		t.Fatalf("domain 코드 생성 실패: %v", err)
+	}
+	if !strings.Contains(string(code2), "package course") {
+		t.Errorf("domain=course인데 package course가 아님\n%s", string(code2))
+	}
+
+	// GenerateWith: 도메인별 서브디렉토리에 출력
+	outDir := t.TempDir()
+	if err := Generate(funcs, outDir, nil); err != nil {
+		t.Fatalf("Generate 실패: %v", err)
+	}
+
+	// flat → outDir/login.go
+	if _, err := os.Stat(filepath.Join(outDir, "login.go")); err != nil {
+		t.Errorf("flat 파일이 outDir 루트에 없음: %v", err)
+	}
+
+	// domain → outDir/course/create_course.go
+	if _, err := os.Stat(filepath.Join(outDir, "course", "create_course.go")); err != nil {
+		t.Errorf("domain 파일이 outDir/course/에 없음: %v", err)
+	}
+}
+
 func readFile(path string) (string, error) {
 	b, err := os.ReadFile(path)
 	return string(b), err

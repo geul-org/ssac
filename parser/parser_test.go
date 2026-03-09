@@ -452,6 +452,29 @@ func GetProjectDetail(w http.ResponseWriter, r *http.Request) {}
 	assertStrSlice(t, "response.Vars", s.Vars, []string{"project", "sessions"})
 }
 
+// --- 도메인 폴더 재귀 탐색 ---
+
+func TestParseDirRecursive(t *testing.T) {
+	_, file, _, _ := runtime.Caller(0)
+	domainDir := filepath.Join(filepath.Dir(file), "..", "testdata", "domain-service")
+
+	funcs, err := ParseDir(domainDir)
+	if err != nil {
+		t.Fatalf("도메인 디렉토리 파싱 실패: %v", err)
+	}
+
+	if len(funcs) != 2 {
+		t.Fatalf("함수 수: got %d, want 2", len(funcs))
+	}
+
+	// WalkDir은 알파벳순이므로 course/create_course.go가 먼저
+	assertStr(t, "funcs[0].Name", funcs[0].Name, "CreateCourse")
+	assertStr(t, "funcs[0].Domain", funcs[0].Domain, "course")
+
+	assertStr(t, "funcs[1].Name", funcs[1].Name, "Login")
+	assertStr(t, "funcs[1].Domain", funcs[1].Domain, "")
+}
+
 // --- 헬퍼 ---
 
 func assertStr(t *testing.T, label, got, want string) {

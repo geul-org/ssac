@@ -5,32 +5,33 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
+	"io/fs"
 	"path/filepath"
 	"strings"
 )
 
-// ParseDir은 디렉토리 내 모든 .go 파일을 파싱하여 []ServiceFunc를 반환한다.
+// ParseDir은 디렉토리 내 모든 .go 파일을 재귀 탐색하여 []ServiceFunc를 반환한다.
+// 하위 디렉토리의 파일은 Domain 필드에 첫 번째 디렉토리명이 설정된다.
 func ParseDir(dir string) ([]ServiceFunc, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, fmt.Errorf("디렉토리 읽기 실패: %w", err)
-	}
-
 	var funcs []ServiceFunc
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") {
-			continue
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(d.Name(), ".go") {
+			return err
 		}
-		sf, err := ParseFile(filepath.Join(dir, entry.Name()))
+		sf, err := ParseFile(path)
 		if err != nil {
-			return nil, fmt.Errorf("%s 파싱 실패: %w", entry.Name(), err)
+			return fmt.Errorf("%s 파싱 실패: %w", path, err)
 		}
 		if sf != nil {
+			rel, _ := filepath.Rel(dir, path)
+			if parts := strings.Split(filepath.Dir(rel), string(filepath.Separator)); parts[0] != "." {
+				sf.Domain = parts[0]
+			}
 			funcs = append(funcs, *sf)
 		}
-	}
-	return funcs, nil
+		return nil
+	})
+	return funcs, err
 }
 
 // ParseFile은 단일 .go 파일을 파싱하여 ServiceFunc를 반환한다.
