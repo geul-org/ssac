@@ -193,7 +193,7 @@ files/                           # Design documents
 go test ./parser/... ./validator/... ./generator/... -v
 ```
 
-52 tests: parser 14 + generator 8 + validator 30
+54 tests: parser 14 + generator 8 + validator 32
 
 ## License
 

@@ -101,6 +101,9 @@ var goTemplates = template.Must(template.New("").Parse(`
 		{{- range .Vars}}
 		"{{.}}": {{.}},
 		{{- end}}
+		{{- if .HasTotal}}
+		"total": total,
+		{{- end}}
 	})
 {{end}}
 `))

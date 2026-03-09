@@ -695,3 +695,51 @@ func countErrors(errs []ValidationError, tag string) int {
 	}
 	return n
 }
+
+func TestStripModelPrefix(t *testing.T) {
+	tests := []struct {
+		queryName, modelName, want string
+	}{
+		{"CourseFindByID", "Course", "FindByID"},
+		{"CourseList", "Course", "List"},
+		{"FindByID", "Course", "FindByID"},
+		{"Create", "User", "Create"},
+		{"UserCreate", "User", "Create"},
+		{"Courses", "Course", "Courses"}, // "s"는 소문자 → 분리 안 됨
+	}
+	for _, tt := range tests {
+		got := stripModelPrefix(tt.queryName, tt.modelName)
+		if got != tt.want {
+			t.Errorf("stripModelPrefix(%q, %q) = %q, want %q", tt.queryName, tt.modelName, got, tt.want)
+		}
+	}
+}
+
+func TestDDLColumnOrder(t *testing.T) {
+	_, file, _, _ := runtime.Caller(0)
+	dummyRoot := filepath.Join(filepath.Dir(file), "..", "specs", "dummy-study")
+
+	st, err := LoadSymbolTable(dummyRoot)
+	if err != nil {
+		t.Fatalf("심볼 테이블 로드 실패: %v", err)
+	}
+
+	table, ok := st.DDLTables["reservations"]
+	if !ok {
+		t.Fatal("reservations 테이블 없음")
+	}
+
+	if len(table.ColumnOrder) == 0 {
+		t.Fatal("ColumnOrder가 비어 있음")
+	}
+
+	// 첫 번째 컬럼은 id여야 함
+	if table.ColumnOrder[0] != "id" {
+		t.Errorf("ColumnOrder[0] = %q, want %q", table.ColumnOrder[0], "id")
+	}
+
+	// ColumnOrder 길이와 Columns 맵 크기가 일치해야 함
+	if len(table.ColumnOrder) != len(table.Columns) {
+		t.Errorf("ColumnOrder 길이(%d) != Columns 크기(%d)", len(table.ColumnOrder), len(table.Columns))
+	}
+}

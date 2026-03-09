@@ -80,9 +80,16 @@ func (g *GoTarget) GenerateFunc(sf parser.ServiceFunc, st *validator.SymbolTable
 		}
 	}
 
-	// QueryOpts 구성 코드 생성
-	if st != nil {
-		if op, ok := st.Operations[sf.Name]; ok && op.HasQueryOpts() {
+	// QueryOpts 구성 코드 생성: List 메서드가 있고 QueryOpts가 존재할 때만
+	if st != nil && hasAnyQueryOpts(st) {
+		needsOpts := false
+		for _, seq := range sf.Sequences {
+			if seq.Type == parser.SeqGet && isListMethod(seq.Model) {
+				needsOpts = true
+				break
+			}
+		}
+		if needsOpts {
 			buf.WriteString("\topts := QueryOpts{}\n\n")
 		}
 	}
@@ -90,8 +97,16 @@ func (g *GoTarget) GenerateFunc(sf parser.ServiceFunc, st *validator.SymbolTable
 	// sequence 블록 생성
 	// 타입 변환 코드에서 err를 선언했으면 이미 선언된 것으로 처리
 	errDeclared := hasConversionErr(typedParams)
+	funcHasTotal := false
 	for i, seq := range sf.Sequences {
 		data := buildTemplateData(seq, &errDeclared, resultTypes, st, sf.Name)
+		if data.HasTotal {
+			funcHasTotal = true
+		}
+		// response 시퀀스에 funcHasTotal 전달
+		if strings.HasPrefix(seq.Type, "response") {
+			data.HasTotal = funcHasTotal
+		}
 
 		tmplName := templateName(seq)
 		var seqBuf bytes.Buffer
@@ -196,17 +211,14 @@ func buildTemplateData(seq parser.Sequence, errDeclared *bool, resultTypes map[s
 	// 파라미터 인자 문자열
 	d.ParamArgs = buildParamArgs(seq.Params)
 
-	// QueryOpts 자동 추가 + HasTotal 결정
-	if st != nil && seq.Type == parser.SeqGet {
-		if op, ok := st.Operations[funcName]; ok && op.HasQueryOpts() {
-			if d.ParamArgs != "" {
-				d.ParamArgs += ", "
-			}
-			d.ParamArgs += "opts"
-			// many cardinality → 3-tuple 반환
-			if seq.Result != nil && strings.HasPrefix(seq.Result.Type, "[]") {
-				d.HasTotal = true
-			}
+	// QueryOpts 자동 추가: List 메서드에만
+	if st != nil && seq.Type == parser.SeqGet && isListMethod(seq.Model) && hasAnyQueryOpts(st) {
+		if d.ParamArgs != "" {
+			d.ParamArgs += ", "
+		}
+		d.ParamArgs += "opts"
+		if seq.Result != nil && strings.HasPrefix(seq.Result.Type, "[]") {
+			d.HasTotal = true
 		}
 	}
 
@@ -530,6 +542,28 @@ func zeroValueChecks(typeName string) (zeroCheck, existsCheck string) {
 	}
 }
 
+// isListMethod는 모델 메서드명이 List로 시작하는지 확인한다.
+func isListMethod(model string) bool {
+	parts := strings.SplitN(model, ".", 2)
+	if len(parts) < 2 {
+		return false
+	}
+	return strings.HasPrefix(parts[1], "List")
+}
+
+// hasAnyQueryOpts는 심볼 테이블에 QueryOpts를 가진 operation이 있는지 확인한다.
+func hasAnyQueryOpts(st *validator.SymbolTable) bool {
+	if st == nil {
+		return false
+	}
+	for _, op := range st.Operations {
+		if op.HasQueryOpts() {
+			return true
+		}
+	}
+	return false
+}
+
 func hasConversionErr(params []typedRequestParam) bool {
 	for _, p := range params {
 		if p.goType != "string" && p.goType != "json_body" {
@@ -644,13 +678,32 @@ func deriveInterfaces(usages []modelUsage, st *validator.SymbolTable) []derivedI
 
 			// 이름 있는 파라미터의 snake_case 수집 (리터럴 역매핑용)
 			usedColumns := map[string]bool{}
+			tableName := toSnakeCase(modelName) + "s"
 			for _, p := range usage.Params {
 				if !strings.HasPrefix(p.Name, `"`) {
 					if strings.Contains(p.Name, ".") {
 						parts := strings.SplitN(p.Name, ".", 2)
 						usedColumns[toSnakeCase(parts[1])] = true
+						// 복합 컬럼명도 추가: enrollment.ID → enrollment_id
+						usedColumns[toSnakeCase(parts[0])+"_"+toSnakeCase(parts[1])] = true
 					} else {
-						usedColumns[toSnakeCase(p.Name)] = true
+						snake := toSnakeCase(p.Name)
+						usedColumns[snake] = true
+						// 변수 참조: DDL 컬럼과 부분 매칭으로 제외
+						if p.Source == "" {
+							if table, ok := st.DDLTables[tableName]; ok {
+								if _, exists := table.Columns[snake]; !exists {
+									words := splitCamelWords(p.Name)
+									for col := range table.Columns {
+										for _, w := range words {
+											if strings.Contains(col, strings.ToLower(w)) {
+												usedColumns[col] = true
+											}
+										}
+									}
+								}
+							}
+						}
 					}
 				}
 			}
@@ -754,7 +807,7 @@ func resolveParamType(p parser.Param, modelName string, st *validator.SymbolTabl
 }
 
 // resolveLiteralParamName은 리터럴 파라미터의 이름을 DDL 역매핑으로 결정한다.
-// 모델 테이블에서 이미 사용된 컬럼을 제외하고 string 타입인 컬럼을 찾는다.
+// 모델 테이블에서 이미 사용된 컬럼을 제외하고 DDL 정의 순서로 첫 번째 string 컬럼을 선택한다.
 func resolveLiteralParamName(modelName string, usedColumns map[string]bool, st *validator.SymbolTable) string {
 	tableName := toSnakeCase(modelName) + "s"
 	table, ok := st.DDLTables[tableName]
@@ -762,24 +815,34 @@ func resolveLiteralParamName(modelName string, usedColumns map[string]bool, st *
 		return ""
 	}
 
-	// id, created_at, updated_at 등 자동 생성 컬럼 제외
 	autoColumns := map[string]bool{
 		"id": true, "created_at": true, "updated_at": true, "deleted_at": true,
 	}
 
-	var candidates []string
-	for col, goType := range table.Columns {
+	// DDL 정의 순서로 순회
+	for _, col := range table.ColumnOrder {
+		goType := table.Columns[col]
 		if autoColumns[col] || usedColumns[col] || goType != "string" {
 			continue
 		}
-		candidates = append(candidates, col)
-	}
-	sort.Strings(candidates)
-
-	if len(candidates) > 0 {
-		return lcFirst(snakeToCamel(candidates[0]))
+		return lcFirst(snakeToCamel(col))
 	}
 	return ""
+}
+
+// splitCamelWords는 camelCase 문자열을 단어로 분리한다.
+// "hashedPassword" → ["hashed", "Password"]
+func splitCamelWords(s string) []string {
+	var words []string
+	start := 0
+	for i := 1; i < len(s); i++ {
+		if s[i] >= 'A' && s[i] <= 'Z' {
+			words = append(words, s[start:i])
+			start = i
+		}
+	}
+	words = append(words, s[start:])
+	return words
 }
 
 // snakeToCamel은 snake_case를 camelCase로 변환한다.

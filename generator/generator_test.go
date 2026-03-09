@@ -227,12 +227,31 @@ func TestGenerateQueryOptsAndTotal(t *testing.T) {
 		{"QueryOpts construction", "opts := QueryOpts{}"},
 		{"opts arg", "reservationModel.ListByUserID(currentUser.UserID, opts)"},
 		{"3-tuple return", "reservations, total, err :="},
+		{"total in response", `"total":        total`},
 	}
 
 	for _, c := range checks {
 		if !strings.Contains(got, c.want) {
 			t.Errorf("[%s] %q 없음\n--- got ---\n%s", c.label, c.want, got)
 		}
+	}
+
+	// get_reservation.go: FindByID에는 opts가 없어야 함
+	sf2, err := parser.ParseFile(filepath.Join(dummyRoot, "service", "get_reservation.go"))
+	if err != nil {
+		t.Fatalf("파싱 실패: %v", err)
+	}
+	code2, err := GenerateFunc(*sf2, st)
+	if err != nil {
+		t.Fatalf("코드 생성 실패: %v", err)
+	}
+	got2 := string(code2)
+
+	if strings.Contains(got2, "QueryOpts") {
+		t.Errorf("FindByID에 QueryOpts가 포함되면 안 됨\n--- got ---\n%s", got2)
+	}
+	if strings.Contains(got2, "opts") {
+		t.Errorf("FindByID에 opts가 포함되면 안 됨\n--- got ---\n%s", got2)
 	}
 }
 

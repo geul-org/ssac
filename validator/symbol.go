@@ -42,6 +42,7 @@ type MethodInfo struct {
 // DDLTable은 DDL에서 파싱한 테이블 컬럼 정보다.
 type DDLTable struct {
 	Columns     map[string]string // snake_case 컬럼명 → Go 타입
+	ColumnOrder []string          // DDL 정의 순서 보존
 	ForeignKeys []ForeignKey      // FK 관계 목록
 	Indexes     []Index           // 인덱스 목록
 }
@@ -165,15 +166,17 @@ func (st *SymbolTable) loadSqlcQueries(dir string) error {
 		scanner := bufio.NewScanner(f)
 		for scanner.Scan() {
 			line := strings.TrimSpace(scanner.Text())
-			// -- name: FindByID :one
+			// -- name: FindByID :one  또는  -- name: CourseFindByID :one
 			if strings.HasPrefix(line, "-- name:") {
 				parts := strings.Fields(line)
 				if len(parts) >= 4 {
-					ms.Methods[parts[2]] = MethodInfo{
+					methodName := stripModelPrefix(parts[2], modelName)
+					ms.Methods[methodName] = MethodInfo{
 						Cardinality: strings.TrimPrefix(parts[3], ":"),
 					}
 				} else if len(parts) >= 3 {
-					ms.Methods[parts[2]] = MethodInfo{}
+					methodName := stripModelPrefix(parts[2], modelName)
+					ms.Methods[methodName] = MethodInfo{}
 				}
 			}
 		}
@@ -184,6 +187,18 @@ func (st *SymbolTable) loadSqlcQueries(dir string) error {
 		}
 	}
 	return nil
+}
+
+// stripModelPrefix는 쿼리 이름에서 모델명 접두사를 제거한다.
+// "CourseFindByID" + "Course" → "FindByID", "FindByID" + "Course" → "FindByID"
+func stripModelPrefix(queryName, modelName string) string {
+	if strings.HasPrefix(queryName, modelName) {
+		stripped := queryName[len(modelName):]
+		if len(stripped) > 0 && stripped[0] >= 'A' && stripped[0] <= 'Z' {
+			return stripped
+		}
+	}
+	return queryName
 }
 
 // sqlFileToModel은 "reservations.sql" → "Reservation" 변환한다.
@@ -527,6 +542,7 @@ func parseDDLTables(content string, tables map[string]DDLTable) {
 		goType := pgTypeToGo(colType)
 		if t, ok := tables[currentTable]; ok {
 			t.Columns[colName] = goType
+			t.ColumnOrder = append(t.ColumnOrder, colName)
 
 			// 인라인 FK: column_name TYPE ... REFERENCES table(col)
 			if fk, ok := parseInlineFK(colName, parts); ok {
