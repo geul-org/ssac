@@ -69,17 +69,44 @@ func validateRequest(sf parser.ServiceFunc, st *SymbolTable) []ValidationError {
 		return nil // 매칭되는 operation이 없으면 스킵
 	}
 
+	// SSaC에서 사용하는 request 필드 수집
+	usedRequestFields := make(map[string]bool)
 	for i, seq := range sf.Sequences {
 		ctx := errCtx{sf.FileName, sf.Name, i}
 		for _, p := range seq.Params {
 			if p.Source != "request" {
 				continue
 			}
+			usedRequestFields[p.Name] = true
+			// 정방향: SSaC @param → OpenAPI request
 			if !op.RequestFields[p.Name] {
 				errs = append(errs, ctx.err("@param", fmt.Sprintf("OpenAPI request에 %q 필드가 없습니다", p.Name)))
 			}
 		}
 	}
+
+	// 역방향: OpenAPI request → SSaC @param
+	// path parameter는 제외 (라우팅에서 자동 바인딩)
+	pathParams := make(map[string]bool)
+	for _, pp := range op.PathParams {
+		pathParams[pp.Name] = true
+	}
+	for field := range op.RequestFields {
+		if pathParams[field] {
+			continue
+		}
+		if !usedRequestFields[field] {
+			errs = append(errs, ValidationError{
+				FileName: sf.FileName,
+				FuncName: sf.Name,
+				SeqIndex: -1,
+				Tag:      "@param",
+				Message:  fmt.Sprintf("OpenAPI request에 %q 필드가 있지만 SSaC @param에서 사용하지 않습니다", field),
+				Level:    "WARNING",
+			})
+		}
+	}
+
 	return errs
 }
 
@@ -91,10 +118,19 @@ func validateResponse(sf parser.ServiceFunc, st *SymbolTable) []ValidationError 
 		return nil
 	}
 
+	var responseVars map[string]bool
+	var responseSeqIdx int
 	for i, seq := range sf.Sequences {
 		if !strings.HasPrefix(seq.Type, "response") {
 			continue
 		}
+		responseSeqIdx = i
+		responseVars = make(map[string]bool)
+		for _, v := range seq.Vars {
+			responseVars[v] = true
+		}
+
+		// 정방향: SSaC @var → OpenAPI response
 		ctx := errCtx{sf.FileName, sf.Name, i}
 		for _, v := range seq.Vars {
 			if !op.ResponseFields[v] {
@@ -102,6 +138,21 @@ func validateResponse(sf parser.ServiceFunc, st *SymbolTable) []ValidationError 
 			}
 		}
 	}
+
+	// 역방향: OpenAPI response → SSaC @var
+	if responseVars != nil && len(op.ResponseFields) > 0 {
+		ctx := errCtx{sf.FileName, sf.Name, responseSeqIdx}
+		for field := range op.ResponseFields {
+			// x-pagination이 있으면 "total"은 코드젠이 자동 생성하므로 제외
+			if field == "total" && op.XPagination != nil {
+				continue
+			}
+			if !responseVars[field] {
+				errs = append(errs, ctx.err("@var", fmt.Sprintf("OpenAPI response에 %q 필드가 있지만 SSaC @var에 없습니다", field)))
+			}
+		}
+	}
+
 	return errs
 }
 

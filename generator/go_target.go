@@ -1072,7 +1072,6 @@ func renderInterfaces(interfaces []derivedInterface, needQueryOpts bool) []byte 
 	SortCol  string
 	SortDir  string
 	Filters  map[string]string
-	Includes []string
 }
 `)
 	}

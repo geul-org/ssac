@@ -556,6 +556,118 @@ func TestValidateWithSymbolsUnknownFunc(t *testing.T) {
 	assertContainsError(t, errs, "@func", "package.funcName")
 }
 
+// --- 역방향 검증: OpenAPI response → SSaC @var ---
+
+func TestValidateReverseResponseMissing(t *testing.T) {
+	st := &SymbolTable{
+		Models: map[string]ModelSymbol{},
+		Operations: map[string]OperationSymbol{
+			"Test": {
+				RequestFields:  map[string]bool{},
+				ResponseFields: map[string]bool{"user": true, "instructor": true},
+			},
+		},
+		Funcs: map[string]bool{},
+	}
+	sf := parser.ServiceFunc{
+		Name:     "Test",
+		FileName: "test.go",
+		Sequences: []parser.Sequence{
+			{Type: "response json", Vars: []string{"user"}}, // instructor 누락
+		},
+	}
+	errs := ValidateWithSymbols([]parser.ServiceFunc{sf}, st)
+	assertContainsError(t, errs, "@var", "instructor")
+}
+
+func TestValidateReverseResponsePaginationTotal(t *testing.T) {
+	st := &SymbolTable{
+		Models: map[string]ModelSymbol{
+			"Item": {Methods: map[string]MethodInfo{"List": {}}},
+		},
+		Operations: map[string]OperationSymbol{
+			"Test": {
+				RequestFields:  map[string]bool{},
+				ResponseFields: map[string]bool{"items": true, "total": true},
+				XPagination:    &XPagination{Style: "offset"},
+			},
+		},
+		Funcs: map[string]bool{},
+	}
+	sf := parser.ServiceFunc{
+		Name:     "Test",
+		FileName: "test.go",
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqGet, Model: "Item.List",
+				Result: &parser.Result{Var: "items", Type: "Item"}},
+			{Type: "response json", Vars: []string{"items"}}, // total 누락이지만 x-pagination이므로 OK
+		},
+	}
+	errs := ValidateWithSymbols([]parser.ServiceFunc{sf}, st)
+	if len(errs) > 0 {
+		t.Errorf("expected no errors, got %v", errs)
+	}
+}
+
+// --- 역방향 검증: OpenAPI request → SSaC @param ---
+
+func TestValidateReverseRequestMissing(t *testing.T) {
+	st := &SymbolTable{
+		Models: map[string]ModelSymbol{
+			"User": {Methods: map[string]MethodInfo{"Create": {}}},
+		},
+		Operations: map[string]OperationSymbol{
+			"Test": {
+				RequestFields:  map[string]bool{"Email": true, "Description": true},
+				ResponseFields: map[string]bool{},
+			},
+		},
+		Funcs: map[string]bool{},
+	}
+	sf := parser.ServiceFunc{
+		Name:     "Test",
+		FileName: "test.go",
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqPost, Model: "User.Create",
+				Result: &parser.Result{Var: "u", Type: "User"},
+				Params: []parser.Param{{Name: "Email", Source: "request"}}}, // Description 누락
+		},
+	}
+	errs := ValidateWithSymbols([]parser.ServiceFunc{sf}, st)
+	assertContainsError(t, errs, "@param", "Description")
+	// WARNING인지 확인
+	for _, e := range errs {
+		if strings.Contains(e.Message, "Description") && e.Level != "WARNING" {
+			t.Errorf("expected WARNING level for reverse request, got %q", e.Level)
+		}
+	}
+}
+
+func TestValidateReverseRequestPathParamSkip(t *testing.T) {
+	st := &SymbolTable{
+		Models: map[string]ModelSymbol{},
+		Operations: map[string]OperationSymbol{
+			"Test": {
+				RequestFields: map[string]bool{"CourseID": true},
+				ResponseFields: map[string]bool{},
+				PathParams:    []PathParam{{Name: "CourseID", GoType: "int64"}},
+			},
+		},
+		Funcs: map[string]bool{},
+	}
+	sf := parser.ServiceFunc{
+		Name:     "Test",
+		FileName: "test.go",
+		Sequences: []parser.Sequence{
+			{Type: "response json", Vars: []string{}},
+		},
+	}
+	errs := ValidateWithSymbols([]parser.ServiceFunc{sf}, st)
+	if len(errs) > 0 {
+		t.Errorf("expected no errors for path param, got %v", errs)
+	}
+}
+
 // --- sqlFileToModel 단수화 ---
 
 func TestSqlFileToModel(t *testing.T) {
