@@ -169,14 +169,14 @@ func TestGenerateModelInterfaces(t *testing.T) {
 		{"Create with time", "startAt time.Time, endAt time.Time"},
 		{"FindByID", "FindByID(reservationID int64) (*Reservation, error)"},
 		{"ListByUserID many+pagination", "ListByUserID(userID int64, opts QueryOpts) ([]Reservation, int, error)"},
-		{"UpdateStatus exec", "UpdateStatus(reservationID int64) error"},
+		{"UpdateStatus exec", "UpdateStatus(reservationID int64, status string) error"},
 		{"RoomModel", "type RoomModel interface"},
 		{"Room Update", "Update(roomID int64, name string, capacity int64, location string) error"},
 		{"UserModel", "type UserModel interface"},
 		{"FindByEmail", "FindByEmail(email string) (*User, error)"},
 		{"SessionModel", "type SessionModel interface"},
-		// dot notation params (user.ID) should NOT appear in interface
-		{"no dot notation", "Create() (*Token, error)"},
+		// dot notation params (user.ID) → userID in interface
+		{"Session Create with dot param", "Create(userID int64) (*Token, error)"},
 	}
 
 	// SSaC에서 사용되지 않는 메서드는 포함되면 안 됨
@@ -195,6 +195,43 @@ func TestGenerateModelInterfaces(t *testing.T) {
 	for _, c := range negChecks {
 		if strings.Contains(got, c.reject) {
 			t.Errorf("[%s] %q가 포함되면 안 됨", c.label, c.reject)
+		}
+	}
+}
+
+func TestGenerateQueryOptsAndTotal(t *testing.T) {
+	_, file, _, _ := runtime.Caller(0)
+	dummyRoot := filepath.Join(filepath.Dir(file), "..", "specs", "dummy-study")
+
+	st, err := validator.LoadSymbolTable(dummyRoot)
+	if err != nil {
+		t.Fatalf("심볼 테이블 로드 실패: %v", err)
+	}
+
+	// list_my_reservations.go: ListByUserID has x-pagination → QueryOpts + 3-tuple
+	sf, err := parser.ParseFile(filepath.Join(dummyRoot, "service", "list_my_reservations.go"))
+	if err != nil {
+		t.Fatalf("파싱 실패: %v", err)
+	}
+
+	code, err := GenerateFunc(*sf, st)
+	if err != nil {
+		t.Fatalf("코드 생성 실패: %v", err)
+	}
+	got := string(code)
+
+	checks := []struct {
+		label string
+		want  string
+	}{
+		{"QueryOpts construction", "opts := QueryOpts{}"},
+		{"opts arg", "reservationModel.ListByUserID(currentUser.UserID, opts)"},
+		{"3-tuple return", "reservations, total, err :="},
+	}
+
+	for _, c := range checks {
+		if !strings.Contains(got, c.want) {
+			t.Errorf("[%s] %q 없음\n--- got ---\n%s", c.label, c.want, got)
 		}
 	}
 }

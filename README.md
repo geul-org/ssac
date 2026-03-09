@@ -120,9 +120,11 @@ When external SSOT (symbol table) is available, `ssac gen` adds:
 - **Source resolution**: `@param Name currentUser` → `currentUser.Name`
 - **`@dto` tag**: `// @dto` on struct types without DDL tables — skips DDL table matching in cross-validation
 - **DDL FK/Index parsing**: REFERENCES (inline/constraint), CREATE INDEX → available for cross-validation
+- **QueryOpts auto-pass**: x-extensions present → `opts := QueryOpts{}` + `opts` arg appended to model call
+- **List 3-tuple return**: `:many` + QueryOpts → `result, total, err :=` (includes count)
 - **Model interface derivation**: Crosses 3 SSOT sources → `<outDir>/model/models_gen.go`
   - sqlc: method names + cardinality (`:one`→`*T`, `:many`→`[]T`, `:exec`→`error`)
-  - SSaC: business parameters (only methods actually used)
+  - SSaC: all @param sources included (request, currentUser, dot notation `user.ID`→`userID`, literal `"pending"`→DDL reverse-mapping)
   - OpenAPI x-extensions → `opts QueryOpts` parameter added to model methods
 
 ## OpenAPI x- Extensions
@@ -191,7 +193,7 @@ files/                           # Design documents
 go test ./parser/... ./validator/... ./generator/... -v
 ```
 
-51 tests: parser 14 + generator 7 + validator 30
+52 tests: parser 14 + generator 8 + validator 30
 
 ## License
 

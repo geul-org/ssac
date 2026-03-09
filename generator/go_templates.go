@@ -18,7 +18,7 @@ var goTemplates = template.Must(template.New("").Parse(`
 
 {{- define "get" -}}
 	// get
-	{{.Result.Var}}, err := {{.ModelVar}}.{{.ModelMethod}}({{.ParamArgs}})
+	{{.Result.Var}}, {{if .HasTotal}}total, {{end}}err := {{.ModelVar}}.{{.ModelMethod}}({{.ParamArgs}})
 	if err != nil {
 		http.Error(w, "{{.Message}}", http.StatusInternalServerError)
 		return

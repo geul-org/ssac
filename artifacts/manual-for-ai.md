@@ -79,9 +79,11 @@ files/                           # 기초 자료
 - **Stale 데이터 경고**: put/delete 후 갱신 없이 response 사용 시 WARNING
 - **@dto 태그**: `// @dto` 주석이 달린 struct → DDL 테이블 매칭 건너뜀
 - **DDL FK/Index 파싱**: REFERENCES(인라인/독립), CREATE INDEX → `DDLTable.ForeignKeys`, `DDLTable.Indexes`
+- **QueryOpts 자동 전달**: x-확장 있으면 `opts := QueryOpts{}` 생성 + 모델 호출에 `opts` 인자 자동 추가
+- **List 3-tuple 반환**: many + QueryOpts → `result, total, err :=` (count 포함)
 - **모델 인터페이스 파생**: 3 SSOT 교차 → `<outDir>/model/models_gen.go`
   - sqlc: 메서드명, 카디널리티 (:one→`*T`, :many→`[]T`, :exec→`error`)
-  - SSaC: 비즈니스 파라미터 (실제 사용된 메서드만 포함)
+  - SSaC: 모든 @param 소스 포함 (request, currentUser, dot notation `user.ID`→`userID`, 리터럴 `"pending"`→DDL 역매핑)
   - OpenAPI x-: 인프라 파라미터 (x-pagination → `opts QueryOpts` 추가)
 
 단수화 규칙 (sqlc 파일명 → 모델명): `ies`→`y`, `sses`→`ss`, `xes`→`x`, 나머지 `s` 제거

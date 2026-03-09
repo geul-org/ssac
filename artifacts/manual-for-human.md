@@ -419,8 +419,17 @@ type Token struct {
 
 교차 규칙:
 - **sqlc**: 메서드명과 카디널리티 (`:one`→포인터, `:many`→슬라이스, `:exec`→error만)
-- **SSaC**: 비즈니스 파라미터명과 타입 (DDL 기반, 실제 사용된 메서드만 포함)
+- **SSaC**: 모든 @param 소스 포함 (request, currentUser, dot notation, 리터럴 DDL 역매핑. 실제 사용된 메서드만)
 - **OpenAPI x-**: 인프라 파라미터 (`x-pagination` 있으면 `opts QueryOpts` 추가, `:many`+x-pagination → total count 포함)
+
+모든 `@param` 소스가 인터페이스에 포함된다:
+
+| 소스 | 이름 결정 | 타입 결정 |
+|---|---|---|
+| `request` | 파라미터명 lcFirst | DDL 컬럼 타입 |
+| `currentUser` | 파라미터명 lcFirst | DDL 컬럼 타입 |
+| dot notation (`user.ID`) | 결합 (`userID`) | 참조 테이블 DDL 조회 |
+| 리터럴 (`"pending"`) | DDL 역매핑 (미사용 string 컬럼) | `string` |
 
 생성 예시:
 ```go
@@ -429,10 +438,16 @@ package model
 import "time"
 
 type ReservationModel interface {
-    Create(userID string, roomID string, startAt time.Time, endAt time.Time) (*Reservation, error)
-    FindByID(reservationID string) (*Reservation, error)
-    ListByUserID(userID string) ([]Reservation, error)
-    UpdateStatus(reservationID string) error
+    CountByRoomID(roomID int64) (*int, error)
+    Create(userID int64, roomID int64, startAt time.Time, endAt time.Time) (*Reservation, error)
+    FindByID(reservationID int64) (*Reservation, error)
+    FindConflict(roomID int64, startAt time.Time, endAt time.Time) (*Reservation, error)
+    ListByUserID(userID int64, opts QueryOpts) ([]Reservation, int, error)
+    UpdateStatus(reservationID int64, status string) error
+}
+
+type SessionModel interface {
+    Create(userID int64) (*Token, error)
 }
 
 type QueryOpts struct {

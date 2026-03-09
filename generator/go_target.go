@@ -80,11 +80,18 @@ func (g *GoTarget) GenerateFunc(sf parser.ServiceFunc, st *validator.SymbolTable
 		}
 	}
 
+	// QueryOpts 구성 코드 생성
+	if st != nil {
+		if op, ok := st.Operations[sf.Name]; ok && op.HasQueryOpts() {
+			buf.WriteString("\topts := QueryOpts{}\n\n")
+		}
+	}
+
 	// sequence 블록 생성
 	// 타입 변환 코드에서 err를 선언했으면 이미 선언된 것으로 처리
 	errDeclared := hasConversionErr(typedParams)
 	for i, seq := range sf.Sequences {
-		data := buildTemplateData(seq, &errDeclared, resultTypes)
+		data := buildTemplateData(seq, &errDeclared, resultTypes, st, sf.Name)
 
 		tmplName := templateName(seq)
 		var seqBuf bytes.Buffer
@@ -161,9 +168,11 @@ type templateData struct {
 	FirstErr        bool
 	// response
 	Vars []string
+	// list
+	HasTotal bool // many + QueryOpts → 3-tuple 반환
 }
 
-func buildTemplateData(seq parser.Sequence, errDeclared *bool, resultTypes map[string]string) templateData {
+func buildTemplateData(seq parser.Sequence, errDeclared *bool, resultTypes map[string]string, st *validator.SymbolTable, funcName string) templateData {
 	d := templateData{
 		Message: seq.Message,
 		Result:  seq.Result,
@@ -186,6 +195,20 @@ func buildTemplateData(seq parser.Sequence, errDeclared *bool, resultTypes map[s
 
 	// 파라미터 인자 문자열
 	d.ParamArgs = buildParamArgs(seq.Params)
+
+	// QueryOpts 자동 추가 + HasTotal 결정
+	if st != nil && seq.Type == parser.SeqGet {
+		if op, ok := st.Operations[funcName]; ok && op.HasQueryOpts() {
+			if d.ParamArgs != "" {
+				d.ParamArgs += ", "
+			}
+			d.ParamArgs += "opts"
+			// many cardinality → 3-tuple 반환
+			if seq.Result != nil && strings.HasPrefix(seq.Result.Type, "[]") {
+				d.HasTotal = true
+			}
+		}
+	}
 
 	// guard 대상 + 타입별 비교식
 	d.Target = seq.Target
@@ -619,10 +642,30 @@ func deriveInterfaces(usages []modelUsage, st *validator.SymbolTable) []derivedI
 
 			dm := derivedMethod{Name: methodName}
 
+			// 이름 있는 파라미터의 snake_case 수집 (리터럴 역매핑용)
+			usedColumns := map[string]bool{}
+			for _, p := range usage.Params {
+				if !strings.HasPrefix(p.Name, `"`) {
+					if strings.Contains(p.Name, ".") {
+						parts := strings.SplitN(p.Name, ".", 2)
+						usedColumns[toSnakeCase(parts[1])] = true
+					} else {
+						usedColumns[toSnakeCase(p.Name)] = true
+					}
+				}
+			}
+
 			for _, p := range usage.Params {
 				dp := derivedParam{
 					Name:   resolveParamName(p),
 					GoType: resolveParamType(p, usage.ModelName, st),
+				}
+				// 리터럴 파라미터: DDL 역매핑으로 이름 결정
+				if strings.HasPrefix(p.Name, `"`) {
+					dp.Name = resolveLiteralParamName(modelName, usedColumns, st)
+					if dp.Name != "" {
+						usedColumns[toSnakeCase(dp.Name)] = true
+					}
 				}
 				dm.Params = append(dm.Params, dp)
 			}
@@ -647,16 +690,35 @@ func deriveInterfaces(usages []modelUsage, st *validator.SymbolTable) []derivedI
 func resolveParamName(p parser.Param) string {
 	name := p.Name
 	if strings.HasPrefix(name, `"`) {
-		return ""
+		return "" // 리터럴 → deriveInterfaces에서 DDL 역매핑으로 이름 결정
 	}
 	if strings.Contains(name, ".") {
-		return ""
+		// "enrollment.ID" → "enrollmentID", "course.Price" → "coursePrice"
+		parts := strings.SplitN(name, ".", 2)
+		field := parts[1]
+		if len(field) > 0 {
+			field = strings.ToUpper(field[:1]) + field[1:]
+		}
+		return parts[0] + field
 	}
 	return lcFirst(name)
 }
 
 func resolveParamType(p parser.Param, modelName string, st *validator.SymbolTable) string {
 	if strings.HasPrefix(p.Name, `"`) {
+		return "string"
+	}
+
+	// dot notation: "enrollment.ID" → enrollments 테이블의 id 컬럼
+	if strings.Contains(p.Name, ".") {
+		parts := strings.SplitN(p.Name, ".", 2)
+		refTable := toSnakeCase(parts[0]) + "s"
+		refCol := toSnakeCase(parts[1])
+		if table, ok := st.DDLTables[refTable]; ok {
+			if goType, ok := table.Columns[refCol]; ok {
+				return goType
+			}
+		}
 		return "string"
 	}
 
@@ -689,6 +751,46 @@ func resolveParamType(p parser.Param, modelName string, st *validator.SymbolTabl
 	}
 
 	return "string"
+}
+
+// resolveLiteralParamName은 리터럴 파라미터의 이름을 DDL 역매핑으로 결정한다.
+// 모델 테이블에서 이미 사용된 컬럼을 제외하고 string 타입인 컬럼을 찾는다.
+func resolveLiteralParamName(modelName string, usedColumns map[string]bool, st *validator.SymbolTable) string {
+	tableName := toSnakeCase(modelName) + "s"
+	table, ok := st.DDLTables[tableName]
+	if !ok {
+		return ""
+	}
+
+	// id, created_at, updated_at 등 자동 생성 컬럼 제외
+	autoColumns := map[string]bool{
+		"id": true, "created_at": true, "updated_at": true, "deleted_at": true,
+	}
+
+	var candidates []string
+	for col, goType := range table.Columns {
+		if autoColumns[col] || usedColumns[col] || goType != "string" {
+			continue
+		}
+		candidates = append(candidates, col)
+	}
+	sort.Strings(candidates)
+
+	if len(candidates) > 0 {
+		return lcFirst(snakeToCamel(candidates[0]))
+	}
+	return ""
+}
+
+// snakeToCamel은 snake_case를 camelCase로 변환한다.
+func snakeToCamel(s string) string {
+	parts := strings.Split(s, "_")
+	for i := range parts {
+		if len(parts[i]) > 0 {
+			parts[i] = strings.ToUpper(parts[i][:1]) + parts[i][1:]
+		}
+	}
+	return strings.Join(parts, "")
 }
 
 func deriveReturnType(mi validator.MethodInfo, usage modelUsage, hasQueryOpts bool) string {
