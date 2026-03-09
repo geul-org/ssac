@@ -16,7 +16,7 @@ import "net/http"
 // @message "예약을 찾을 수 없습니다"
 
 // @sequence call
-// @func calculateRefund
+// @func billing.calculateRefund
 // @param reservation
 // @result refund Refund
 

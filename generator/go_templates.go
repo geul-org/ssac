@@ -76,14 +76,6 @@ var goTemplates = template.Must(template.New("").Parse(`
 	}
 {{end}}
 
-{{- define "password" -}}
-	// password
-	if err := bcrypt.CompareHashAndPassword([]byte({{.Hash}}), []byte({{.Plain}})); err != nil {
-		http.Error(w, "{{.Message}}", http.StatusUnauthorized)
-		return
-	}
-{{end}}
-
 {{- define "call_component" -}}
 	// call component
 	{{if .Result}}{{.Result.Var}}, {{end}}err {{if .FirstErr}}:={{else}}={{end}} {{.Component}}.{{.ComponentMethod}}({{.ParamArgs}})
@@ -95,11 +87,14 @@ var goTemplates = template.Must(template.New("").Parse(`
 
 {{- define "call_func" -}}
 	// call func
-	{{if .Result}}{{.Result.Var}}, {{end}}err {{if .FirstErr}}:={{else}}={{end}} {{.Func}}({{.ParamArgs}})
+	{{if .Result}}out, {{end}}err {{if .FirstErr}}:={{else}}={{end}} {{.PkgName}}.{{.FuncMethod}}({{.PkgName}}.{{.FuncMethod}}Input{ {{.InputFields}} })
 	if err != nil {
-		http.Error(w, "{{.Message}}", http.StatusInternalServerError)
+		http.Error(w, "{{.Message}}", {{.FuncErrStatus}})
 		return
 	}
+{{- if .Result}}
+	{{.Result.Var}} := out.{{.ResultField}}
+{{- end}}
 {{end}}
 
 {{- define "response json" -}}

@@ -177,13 +177,16 @@ type templateData struct {
 	Action   string
 	Resource string
 	ID       string
-	// password
-	Hash  string
-	Plain string
 	// call
 	Component       string
 	ComponentMethod string
 	Func            string
+	PkgName         string // @func 패키지명 (e.g. "auth")
+	PkgField        string // Handler struct 필드명 (e.g. "Auth") — 현재 미사용
+	FuncMethod      string // PascalCase 메서드명 (e.g. "HashPassword")
+	InputFields     string // Input struct 필드 (e.g. "Password: password, ...")
+	ResultField     string // Output struct에서 추출할 필드명 (e.g. "HashedPassword")
+	FuncErrStatus   string // 에러 시 HTTP status (e.g. "http.StatusInternalServerError")
 	FirstErr        bool
 	// response
 	Vars []string
@@ -250,16 +253,24 @@ func buildTemplateData(seq parser.Sequence, errDeclared *bool, resultTypes map[s
 	d.Resource = seq.Resource
 	d.ID = resolveParamRef(seq.ID)
 
-	// password
-	if seq.Type == parser.SeqPassword && len(seq.Params) >= 2 {
-		d.Hash = resolveParamRef(seq.Params[0].Name)
-		d.Plain = resolveParamRef(seq.Params[1].Name)
-	}
-
 	// call
 	d.Component = seq.Component
 	d.ComponentMethod = "Execute"
 	d.Func = seq.Func
+
+	// call func with package
+	if seq.Type == parser.SeqCall && seq.Package != "" {
+		d.PkgName = seq.Package
+		d.FuncMethod = ucFirst(seq.Func)
+		d.InputFields = buildInputFields(seq.Params)
+		if seq.Result != nil {
+			d.ResultField = ucFirst(seq.Result.Var)
+		}
+		d.FuncErrStatus = "http.StatusInternalServerError"
+		if seq.Result == nil {
+			d.FuncErrStatus = "http.StatusUnauthorized"
+		}
+	}
 
 	// err 선언 추적
 	switch seq.Type {
@@ -448,10 +459,10 @@ func collectImports(seqs []parser.Sequence, typedParams []typedRequestParam) []s
 		switch {
 		case strings.HasPrefix(seq.Type, "response json"):
 			seen["encoding/json"] = true
-		case seq.Type == parser.SeqPassword:
-			seen["golang.org/x/crypto/bcrypt"] = true
 		case seq.Type == parser.SeqGuardState:
 			seen["states/"+seq.Target+"state"] = true
+		case seq.Type == parser.SeqCall && seq.Package != "":
+			seen[seq.Package] = true
 		}
 	}
 
@@ -467,7 +478,7 @@ func collectImports(seqs []parser.Sequence, typedParams []typedRequestParam) []s
 	}
 
 	var imports []string
-	order := []string{"encoding/json", "net/http", "strconv", "time", "golang.org/x/crypto/bcrypt"}
+	order := []string{"encoding/json", "net/http", "strconv", "time"}
 	for _, imp := range order {
 		if seen[imp] {
 			imports = append(imports, imp)
@@ -515,6 +526,39 @@ func resolveParamRef(name string) string {
 	return lcFirst(name)
 }
 
+// ucFirst는 첫 글자를 대문자로 변환한다.
+func ucFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+// buildInputFields는 @param 리스트를 Input struct 필드 문자열로 변환한다.
+// @param Password request → "Password: password"
+// @param user.PasswordHash → "PasswordHash: user.PasswordHash"
+func buildInputFields(params []parser.Param) string {
+	var fields []string
+	for _, p := range params {
+		fieldName := p.Name
+		fieldValue := resolveParam(p)
+
+		// dot notation: "user.PasswordHash" → fieldName="PasswordHash", fieldValue="user.PasswordHash"
+		if strings.Contains(p.Name, ".") {
+			parts := strings.SplitN(p.Name, ".", 2)
+			fieldName = parts[1]
+			fieldValue = p.Name
+		}
+		// request source: fieldName stays, fieldValue is lcFirst
+		if p.Source == "request" {
+			fieldValue = lcFirst(p.Name)
+		}
+
+		fields = append(fields, fieldName+": "+fieldValue)
+	}
+	return strings.Join(fields, ", ")
+}
+
 func defaultMessage(seq parser.Sequence) string {
 	modelName := ""
 	if seq.Model != "" {
@@ -539,8 +583,6 @@ func defaultMessage(seq parser.Sequence) string {
 		return "상태 전이가 허용되지 않습니다"
 	case parser.SeqAuthorize:
 		return "권한이 없습니다"
-	case parser.SeqPassword:
-		return "비밀번호가 일치하지 않습니다"
 	case parser.SeqCall:
 		if seq.Component != "" {
 			return seq.Component + " 호출 실패"

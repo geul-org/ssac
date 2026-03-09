@@ -117,9 +117,8 @@ func validateCallTarget(sf parser.ServiceFunc, st *SymbolTable) []ValidationErro
 		if seq.Component != "" && !st.Components[seq.Component] {
 			errs = append(errs, ctx.err("@component", fmt.Sprintf("%q 컴포넌트를 찾을 수 없습니다", seq.Component)))
 		}
-		if seq.Func != "" && !st.Funcs[seq.Func] {
-			errs = append(errs, ctx.err("@func", fmt.Sprintf("%q 함수를 찾을 수 없습니다", seq.Func)))
-		}
+		// @func with package: 외부 패키지이므로 model/ 교차검증 스킵
+		// @func without package: validateRequiredFields에서 이미 ERROR
 	}
 	return errs
 }
@@ -171,17 +170,15 @@ func validateRequiredFields(sf parser.ServiceFunc) []ValidationError {
 				errs = append(errs, ctx.err("@param", "entity.Field 형식이어야 함"))
 			}
 
-		case parser.SeqPassword:
-			if len(seq.Params) < 2 {
-				errs = append(errs, ctx.err("@param", fmt.Sprintf("password는 2개 필요, %d개 있음", len(seq.Params))))
-			}
-
 		case parser.SeqCall:
 			if seq.Component == "" && seq.Func == "" {
 				errs = append(errs, ctx.err("@component/@func", "둘 다 누락"))
 			}
 			if seq.Component != "" && seq.Func != "" {
 				errs = append(errs, ctx.err("@component/@func", "둘 다 지정됨, 하나만 사용"))
+			}
+			if seq.Func != "" && seq.Package == "" {
+				errs = append(errs, ctx.err("@func", "@func는 package.funcName 형식이어야 함"))
 			}
 
 		default:

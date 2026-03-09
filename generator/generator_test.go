@@ -83,7 +83,7 @@ func TestGenerateDeleteProject(t *testing.T) {
 		{"guard exists", "if sessionCount > 0"},
 		{"guard exists msg", "하위 세션이 존재하여 삭제할 수 없습니다"},
 		{"call component", "notification"},
-		{"call func", "cleanupProjectResources(project)"},
+		{"call func", "cleanup.ProjectResources(cleanup.ProjectResourcesInput{"},
 		{"delete", "projectModel.Delete(projectID)"},
 	}
 
@@ -428,19 +428,21 @@ func TestGenerateCustomMessages(t *testing.T) {
 		t.Errorf("authorize 내부 에러 메시지 없음\n%s", got)
 	}
 
-	// password with custom @message
+	// call @func with custom @message (guard형: @result 없음)
 	sf2 := parser.ServiceFunc{
 		Name:     "Login",
 		FileName: "login.go",
 		Sequences: []parser.Sequence{
 			{
-				Type:    parser.SeqGet,
-				Model:   "User.FindByEmail",
-				Params:  []parser.Param{{Name: "Email", Source: "request"}},
-				Result:  &parser.Result{Var: "user", Type: "User"},
+				Type:   parser.SeqGet,
+				Model:  "User.FindByEmail",
+				Params: []parser.Param{{Name: "Email", Source: "request"}},
+				Result: &parser.Result{Var: "user", Type: "User"},
 			},
 			{
-				Type:    parser.SeqPassword,
+				Type:    parser.SeqCall,
+				Package: "auth",
+				Func:    "verifyPassword",
 				Params:  []parser.Param{{Name: "user.PasswordHash"}, {Name: "Password", Source: "request"}},
 				Message: "비밀번호가 틀렸습니다",
 			},
@@ -449,10 +451,10 @@ func TestGenerateCustomMessages(t *testing.T) {
 	}
 	code2, err := GenerateFunc(sf2, nil)
 	if err != nil {
-		t.Fatalf("password 코드 생성 실패: %v", err)
+		t.Fatalf("call func 코드 생성 실패: %v", err)
 	}
 	if !strings.Contains(string(code2), "비밀번호가 틀렸습니다") {
-		t.Errorf("password 커스텀 메시지 없음\n%s", string(code2))
+		t.Errorf("call func 커스텀 메시지 없음\n%s", string(code2))
 	}
 
 	// guard state with custom @message

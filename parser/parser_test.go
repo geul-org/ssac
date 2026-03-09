@@ -114,10 +114,11 @@ func TestParseDeleteProject(t *testing.T) {
 		{Name: `"프로젝트가 삭제됩니다"`},
 	})
 
-	// sequence 6: call @func
+	// sequence 6: call @func with package
 	s = sf.Sequences[6]
 	assertStr(t, "seq[6].Type", s.Type, "call")
-	assertStr(t, "seq[6].Func", s.Func, "cleanupProjectResources")
+	assertStr(t, "seq[6].Package", s.Package, "cleanup")
+	assertStr(t, "seq[6].Func", s.Func, "projectResources")
 	assertParams(t, "seq[6].Params", s.Params, []Param{{Name: "project"}})
 	assertResult(t, "seq[6].Result", s.Result, "cleaned", "bool")
 
@@ -158,7 +159,7 @@ func TestParseTag(t *testing.T) {
 		{"@action delete", "action", "delete"},
 		{"@sequence guard nil project", "sequence", "guard nil project"},
 		{"@component notification", "component", "notification"},
-		{"@func cleanupProjectResources", "func", "cleanupProjectResources"},
+		{"@func cleanup.projectResources", "func", "cleanup.projectResources"},
 		{"@id ProjectID", "id", "ProjectID"},
 		{"@resource project", "resource", "project"},
 		// 값 없는 태그
@@ -185,7 +186,6 @@ func TestParseSequenceType(t *testing.T) {
 		{"put", "put"},
 		{"delete", "delete"},
 		{"authorize", "authorize"},
-		{"password", "password"},
 		{"call", "call"},
 		{"guard nil project", "guard nil"},
 		{"guard exists sessionCount", "guard exists"},
@@ -341,9 +341,9 @@ func TestParseDirEmpty(t *testing.T) {
 	}
 }
 
-// --- 엣지 케이스: password, put 타입 ---
+// --- 엣지 케이스: call @func with package, put 타입 ---
 
-func TestParsePasswordAndPut(t *testing.T) {
+func TestParseCallFuncAndPut(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "login.go")
 	content := `package service
@@ -358,9 +358,11 @@ import "net/http"
 // @sequence guard nil user
 // @message "사용자를 찾을 수 없습니다"
 
-// @sequence password
+// @sequence call
+// @func auth.verifyPassword
 // @param user.PasswordHash
 // @param Password request
+// @message "비밀번호가 일치하지 않습니다"
 
 // @sequence put
 // @model Session.Update
@@ -388,10 +390,13 @@ func Login(w http.ResponseWriter, r *http.Request) {}
 		t.Fatalf("sequence 수: got %d, want 5", len(sf.Sequences))
 	}
 
-	// password
+	// call @func with package
 	s := sf.Sequences[2]
-	assertStr(t, "password.Type", s.Type, "password")
-	assertParams(t, "password.Params", s.Params, []Param{
+	assertStr(t, "call.Type", s.Type, "call")
+	assertStr(t, "call.Package", s.Package, "auth")
+	assertStr(t, "call.Func", s.Func, "verifyPassword")
+	assertStr(t, "call.Message", s.Message, "비밀번호가 일치하지 않습니다")
+	assertParams(t, "call.Params", s.Params, []Param{
 		{Name: "user.PasswordHash"},
 		{Name: "Password", Source: "request"},
 	})

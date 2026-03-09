@@ -10,9 +10,11 @@ import "net/http"
 // @sequence guard nil user
 // @message "사용자를 찾을 수 없습니다"
 
-// @sequence password
+// @sequence call
+// @func auth.verifyPassword
 // @param user.PasswordHash
 // @param Password request
+// @message "비밀번호가 일치하지 않습니다"
 
 // @sequence post
 // @model Session.Create

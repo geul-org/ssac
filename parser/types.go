@@ -10,7 +10,7 @@ type ServiceFunc struct {
 
 // Sequence는 개별 sequence 블록이다.
 type Sequence struct {
-	Type    string   // authorize, get, guard nil, guard exists, post, put, delete, password, call, response
+	Type    string   // authorize, get, guard nil, guard exists, guard state, post, put, delete, call, response
 	Model   string   // @model 값 (e.g. "Project.FindByID")
 	Params  []Param  // @param 리스트
 	Result  *Result  // @result (없을 수 있음)
@@ -23,7 +23,8 @@ type Sequence struct {
 	ID       string // @id
 	// call 전용
 	Component string // @component
-	Func      string // @func
+	Func      string // @func (funcName only, e.g. "hashPassword")
+	Package   string // @func package (e.g. "auth")
 }
 
 // Param은 @param 태그의 파싱 결과다.
@@ -48,7 +49,6 @@ const (
 	SeqPost        = "post"
 	SeqPut         = "put"
 	SeqDelete      = "delete"
-	SeqPassword    = "password"
 	SeqCall        = "call"
 	SeqGuardState  = "guard state"
 	SeqResponse    = "response"
@@ -62,7 +62,6 @@ var ValidSequenceTypes = map[string]bool{
 	SeqPost:        true,
 	SeqPut:         true,
 	SeqDelete:      true,
-	SeqPassword:    true,
 	SeqCall:        true,
 	SeqGuardState:  true,
 	SeqResponse:    true,

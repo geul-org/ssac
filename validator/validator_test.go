@@ -119,16 +119,16 @@ func TestValidateGuardMissingTarget(t *testing.T) {
 	}
 }
 
-func TestValidatePasswordMissingParams(t *testing.T) {
+func TestValidateCallFuncMissingPackage(t *testing.T) {
 	sf := parser.ServiceFunc{
 		Name:     "Test",
 		FileName: "test.go",
 		Sequences: []parser.Sequence{
-			{Type: parser.SeqPassword, Params: []parser.Param{{Name: "hash"}}}, // 1개만
+			{Type: parser.SeqCall, Func: "hashPassword"}, // Package 없음
 		},
 	}
 	errs := Validate([]parser.ServiceFunc{sf})
-	assertContainsError(t, errs, "@param", "2개 필요")
+	assertContainsError(t, errs, "@func", "package.funcName 형식")
 }
 
 func TestValidateCallMissingBoth(t *testing.T) {
@@ -581,7 +581,7 @@ func TestValidateWithSymbolsUnknownComponent(t *testing.T) {
 	assertContainsError(t, errs, "@component", "emailer")
 }
 
-// --- 외부 검증 실패 케이스: 존재하지 않는 func ---
+// --- 외부 검증 실패 케이스: @func 패키지 없음 ---
 
 func TestValidateWithSymbolsUnknownFunc(t *testing.T) {
 	st := &SymbolTable{
@@ -599,7 +599,7 @@ func TestValidateWithSymbolsUnknownFunc(t *testing.T) {
 		},
 	}
 	errs := ValidateWithSymbols([]parser.ServiceFunc{sf}, st)
-	assertContainsError(t, errs, "@func", "unknownFunc")
+	assertContainsError(t, errs, "@func", "package.funcName")
 }
 
 // --- sqlFileToModel 단수화 ---

@@ -29,7 +29,7 @@ import "net/http"
 // @param "프로젝트가 삭제됩니다"
 
 // @sequence call
-// @func cleanupProjectResources
+// @func cleanup.projectResources
 // @param project
 // @result cleaned bool
 
