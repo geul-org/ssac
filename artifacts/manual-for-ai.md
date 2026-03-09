@@ -3,124 +3,123 @@
 ## CLI
 
 ```
-ssac parse [dir]              # 주석 파싱 결과 출력 (기본: specs/backend/service/)
-ssac validate [dir]           # 내부 검증 또는 외부 SSOT 교차 검증 (자동 감지)
-ssac gen <service-dir> <out>  # validate → codegen → gofmt (심볼 테이블 있으면 타입 변환 + 모델 인터페이스 생성)
+ssac parse [dir]              # Print parsed sequence structure (default: specs/backend/service/)
+ssac validate [dir]           # Internal validation or external SSOT cross-validation (auto-detect)
+ssac gen <service-dir> <out>  # validate → codegen → gofmt (with symbol table: type conversion + model interface generation)
 ```
 
-## 기술 스택
+## Tech Stack
 
-Go 1.24+, `go/ast`(파싱), `text/template`(코드젠), `gopkg.in/yaml.v3`(OpenAPI)
+Go 1.24+, `go/ast` (parsing), `text/template` (codegen), `gopkg.in/yaml.v3` (OpenAPI)
 
-## DSL 문법
+## DSL Syntax
 
 ```go
-// @sequence <type>        — 블록 시작. 11종: authorize|get|guard nil|guard exists|guard state|post|put|delete|password|call|response
-// @model <Model.Method>   — 리소스 모델.메서드 (get/post/put/delete)
-// @param <Name> <source> [-> column]  — source: request, currentUser, 변수명, "리터럴". -> column: 명시적 DDL 컬럼 매핑
-// @result <var> <Type>    — 결과 바인딩 (get/post 필수, call 선택)
-// @message "msg"          — 커스텀 에러 메시지 (선택, 기본값 자동생성)
-// @var <name>             — response에서 반환할 변수
-// @action @resource @id   — authorize 전용 (3개 모두 필수)
-// @component | @func      — call 전용 (택일 필수)
+// @sequence <type>        — Block start. 11 types: authorize|get|guard nil|guard exists|guard state|post|put|delete|password|call|response
+// @model <Model.Method>   — Resource model.method (get/post/put/delete)
+// @param <Name> <source> [-> column]  — source: request, currentUser, variable, "literal". -> column: explicit DDL column mapping
+// @result <var> <Type>    — Result binding (required for get/post, optional for call)
+// @message "msg"          — Custom error message (optional, auto-generated default)
+// @var <name>             — Variable to include in response
+// @action @resource @id   — authorize only (all 3 required)
+// @component | @func      — call only (mutually exclusive, one required)
 ```
 
-타입별 필수 태그:
+Required tags per type:
 
-| 타입 | 필수 |
+| Type | Required |
 |---|---|
 | authorize | @action, @resource, @id |
 | get, post | @model, @result |
 | put, delete | @model |
-| guard nil/exists | target (sequence 라인에 변수명) |
-| guard state | target (stateDiagramID), @param 1개 (entity.Field) |
-| password | @param 2개 (hash, plain) |
-| call | @component 또는 @func (택일) |
-| response | (없음, @var는 선택) |
+| guard nil/exists | target (variable name on sequence line) |
+| guard state | target (stateDiagramID), @param exactly 1 (entity.Field) |
+| password | @param ×2 (hash, plain) |
+| call | @component or @func (one required) |
+| response | (none, @var is optional) |
 
-## 디렉토리
+## Directory Structure
 
 ```
-cmd/ssac/main.go                 # CLI 진입점
-parser/                          # 주석 → []ServiceFunc
-validator/                       # 내부 + 외부 SSOT 검증
-generator/                       # Target 인터페이스 기반 코드젠 (다중 언어 확장 가능)
-  target.go                      #   Target 인터페이스 + DefaultTarget()
-  go_target.go                   #   GoTarget: Go 코드 생성 구현
-  go_templates.go                #   Go 템플릿
-  generator.go                   #   하위 호환 래퍼 (Generate, GenerateWith) + 유틸
-specs/                           # 선언 (입력, SSOT)
-  dummy-study/                   #   스터디룸 예약 더미 프로젝트
+cmd/ssac/main.go                 # CLI entrypoint
+parser/                          # Comments → []ServiceFunc
+validator/                       # Internal + external SSOT validation
+generator/                       # Target interface-based codegen (multi-language extensible)
+  target.go                      #   Target interface + DefaultTarget()
+  go_target.go                   #   GoTarget: Go code generation
+  go_templates.go                #   Go templates
+  generator.go                   #   Backward-compatible wrappers (Generate, GenerateWith) + utils
+specs/                           # Declarations (input, SSOT)
+  dummy-study/                   #   Study room reservation demo project
     service/  db/queries/  api/  model/
-  plans/                         #   구현 계획서
-artifacts/                       # 문서
-  manual-for-human.md            #   상세 매뉴얼
-  manual-for-ai.md               #   컴팩트 레퍼런스
-testdata/                        # 테스트 fixture
-files/                           # 기초 자료
+  plans/                         #   Implementation plans
+artifacts/                       # Documentation
+  manual-for-human.md            #   Detailed manual
+  manual-for-ai.md               #   Compact reference
+testdata/                        # Test fixtures
+files/                           # Design documents
 ```
 
-## 외부 검증 프로젝트 구조
+## External Validation Project Layout
 
-`ssac validate <project-root>` 시 자동 감지:
-- `<root>/service/**/*.go` — sequence spec (재귀 탐색, 도메인 폴더 지원)
-- `<root>/db/*.sql` — DDL (CREATE TABLE → 컬럼 타입)
-- `<root>/db/queries/*.sql` — sqlc 쿼리 (파일명→모델, `-- name: Method :cardinality`)
-- `<root>/api/openapi.yaml` — OpenAPI 3.0 (operationId=함수명, x-pagination/sort/filter/include)
-- `<root>/model/*.go` — Go interface→component, func→@func, `// @dto`→DDL 테이블 없는 DTO 등록
+Auto-detected by `ssac validate <project-root>`:
+- `<root>/service/**/*.go` — Sequence specs (recursive, domain folder support)
+- `<root>/db/*.sql` — DDL (CREATE TABLE → column types)
+- `<root>/db/queries/*.sql` — sqlc queries (filename→model, `-- name: Method :cardinality`)
+- `<root>/api/openapi.yaml` — OpenAPI 3.0 (operationId=function name, x-pagination/sort/filter/include)
+- `<root>/model/*.go` — Go interface→component, func→@func, `// @dto`→DTO without DDL table
 
-## 코드젠 기능
+## Codegen Features
 
-심볼 테이블(외부 SSOT)이 있을 때 추가되는 기능:
+Additional features when symbol table (external SSOT) is available:
 
-- **타입 변환**: DDL 컬럼 타입 기반 request 파라미터 변환 (int64→`strconv.ParseInt`, time.Time→`time.Parse`, 실패 시 400 early return)
-- **`-> column` 매핑**: `@param PaymentMethod request -> method` — 자동 변환 대신 명시적 DDL 컬럼 매핑
-- **Guard 값 타입**: result 타입에 따른 zero value 비교 (int→`== 0`/`> 0`, pointer→`== nil`/`!= nil`)
+- **Type conversion**: DDL column type-based request param conversion (int64→`strconv.ParseInt`, time.Time→`time.Parse`, 400 early return on failure)
+- **`-> column` mapping**: `@param PaymentMethod request -> method` — explicit DDL column mapping instead of auto-conversion
+- **Guard value types**: Zero value comparison based on result type (int→`== 0`/`> 0`, pointer→`== nil`/`!= nil`)
 - **currentUser/config source**: `@param Name currentUser` → `currentUser.Name`
-- **Stale 데이터 경고**: put/delete 후 갱신 없이 response 사용 시 WARNING
-- **@dto 태그**: `// @dto` 주석이 달린 struct → DDL 테이블 매칭 건너뜀
-- **DDL FK/Index 파싱**: REFERENCES(인라인/독립), CREATE INDEX → `DDLTable.ForeignKeys`, `DDLTable.Indexes`
-- **QueryOpts 자동 전달**: x-확장 있으면 `opts := QueryOpts{}` 생성 + 모델 호출에 `opts` 인자 자동 추가
-- **List 3-tuple 반환**: many + QueryOpts → `result, total, err :=` (count 포함)
-- **모델 인터페이스 파생**: 3 SSOT 교차 → `<outDir>/model/models_gen.go`
-  - sqlc: 메서드명, 카디널리티 (:one→`*T`, :many→`[]T`, :exec→`error`)
-  - SSaC: 모든 @param 소스 포함 (request, currentUser, dot notation `user.ID`→`userID`, 리터럴 `"pending"`→DDL 역매핑)
-  - OpenAPI x-: 인프라 파라미터 (x-pagination → `opts QueryOpts` 추가)
+- **Stale data warning**: WARNING when response uses variable after put/delete without re-fetch
+- **@dto tag**: `// @dto` annotated struct → skips DDL table matching
+- **DDL FK/Index parsing**: REFERENCES (inline/constraint), CREATE INDEX → `DDLTable.ForeignKeys`, `DDLTable.Indexes`
+- **QueryOpts auto-pass**: x-extensions present → `opts := QueryOpts{}` + `opts` arg appended to model call
+- **List 3-tuple return**: many + QueryOpts → `result, total, err :=` (includes count)
+- **Model interface derivation**: Crosses 3 SSOT sources → `<outDir>/model/models_gen.go`
+  - sqlc: method names, cardinality (:one→`*T`, :many→`[]T`, :exec→`error`)
+  - SSaC: all @param sources included (request, currentUser, dot notation `user.ID`→`userID`, literal `"pending"`→DDL reverse-mapping)
+  - OpenAPI x-: infrastructure params (x-pagination → `opts QueryOpts` added)
+- **Domain folder structure**: `service/auth/login.go` → `Domain="auth"` → `outDir/auth/login.go`, `package auth`. Flat backward compatible.
+- **guard state codegen**: `guard state {id}` + `@param entity.Field` → `{id}state.CanTransition(entity.Field, "FuncName")`, import `"states/{id}state"`
 
-- **도메인 폴더 구조**: `service/auth/login.go` → `Domain="auth"` → `outDir/auth/login.go`, `package auth`. flat 하위 호환.
-- **guard state 코드젠**: `guard state {id}` + `@param entity.Field` → `{id}state.CanTransition(entity.Field, "FuncName")`, import `"states/{id}state"`
+Singularization rules (sqlc filename → model name): `ies`→`y`, `sses`→`ss`, `xes`→`x`, otherwise remove trailing `s`
 
-단수화 규칙 (sqlc 파일명 → 모델명): `ies`→`y`, `sses`→`ss`, `xes`→`x`, 나머지 `s` 제거
+## OpenAPI x- Extensions
 
-## OpenAPI x- 확장
-
-OpenAPI 엔드포인트에 인프라 파라미터를 선언한다. SSaC spec에는 비즈니스 파라미터만 선언하고, 인프라 파라미터는 x-에만 선언한다.
+Infrastructure parameters are declared in OpenAPI x- extensions. SSaC specs only declare business parameters; infrastructure parameters go in x- only.
 
 ```yaml
 /api/reservations:
   get:
     operationId: ListReservations
-    x-pagination:                    # 페이지네이션
+    x-pagination:                    # Pagination
       style: offset                  # offset | cursor
       defaultLimit: 20
       maxLimit: 100
-    x-sort:                          # 정렬
+    x-sort:                          # Sorting
       allowed: [start_at, created_at]
       default: start_at
       direction: desc                # asc | desc
-    x-filter:                        # 필터
+    x-filter:                        # Filtering
       allowed: [status, room_id]
-    x-include:                       # 정방향 FK include (FK컬럼:참조테이블.참조컬럼)
+    x-include:                       # Forward FK include (FK_column:ref_table.ref_column)
       allowed: [room_id:rooms.id, user_id:users.id]
 ```
 
-코드젠 영향:
-- x- 있는 operation의 모델 메서드에 `opts QueryOpts` 파라미터 추가
-- `:many` + x-pagination → 반환 타입에 total count 포함: `([]T, int, error)`
-- `QueryOpts` struct 자동 생성 (Limit, Offset, Cursor, SortCol, SortDir, Filters, Includes)
+Codegen effects:
+- Operations with x- get `opts QueryOpts` parameter in model methods
+- `:many` + x-pagination → return type includes total count: `([]T, int, error)`
+- `QueryOpts` struct auto-generated (Limit, Offset, Cursor, SortCol, SortDir, Filters, Includes)
 
 ## Coding Conventions
 
-- gofmt 준수, 에러 즉시 처리 (early return)
-- 파일명: snake_case, 변수/함수: camelCase, 타입: PascalCase
-- 테스트: `go test ./parser/... ./validator/... ./generator/... -count=1`
+- gofmt compliant, immediate error handling (early return)
+- Filenames: snake_case, variables/functions: camelCase, types: PascalCase
+- Tests: `go test ./parser/... ./validator/... ./generator/... -count=1`

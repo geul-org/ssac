@@ -360,8 +360,7 @@ func buildJSONBodyParams(rawParams []struct {
 	// struct 정의
 	buf.WriteString("\tvar req struct {\n")
 	for _, rp := range rawParams {
-		jsonTag := toSnakeCase(rp.name)
-		buf.WriteString(fmt.Sprintf("\t\t%s %s `json:\"%s\"`\n", rp.name, rp.goType, jsonTag))
+		buf.WriteString(fmt.Sprintf("\t\t%s %s `json:\"%s\"`\n", rp.name, rp.goType, rp.name))
 	}
 	buf.WriteString("\t}\n")
 
