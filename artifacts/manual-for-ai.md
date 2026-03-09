@@ -15,14 +15,14 @@ Go 1.24+, `go/ast` (parsing), `text/template` (codegen), `gopkg.in/yaml.v3` (Ope
 ## DSL Syntax
 
 ```go
-// @sequence <type>        — Block start. 11 types: authorize|get|guard nil|guard exists|guard state|post|put|delete|password|call|response
+// @sequence <type>        — Block start. 10 types: authorize|get|guard nil|guard exists|guard state|post|put|delete|call|response
 // @model <Model.Method>   — Resource model.method (get/post/put/delete)
 // @param <Name> <source> [-> column]  — source: request, currentUser, variable, "literal". -> column: explicit DDL column mapping
 // @result <var> <Type>    — Result binding (required for get/post, optional for call)
 // @message "msg"          — Custom error message (optional, auto-generated default)
 // @var <name>             — Variable to include in response
 // @action @resource @id   — authorize only (all 3 required)
-// @component | @func      — call only (mutually exclusive, one required)
+// @component | @func      — call only (mutually exclusive, one required). @func requires package.funcName format
 ```
 
 Required tags per type:
@@ -34,8 +34,7 @@ Required tags per type:
 | put, delete | @model |
 | guard nil/exists | target (variable name on sequence line) |
 | guard state | target (stateDiagramID), @param exactly 1 (entity.Field) |
-| password | @param ×2 (hash, plain) |
-| call | @component or @func (one required) |
+| call | @component or @func package.funcName (one required) |
 | response | (none, @var is optional) |
 
 ## Directory Structure
@@ -88,6 +87,7 @@ Additional features when symbol table (external SSOT) is available:
   - OpenAPI x-: infrastructure params (x-pagination → `opts QueryOpts` added)
 - **Domain folder structure**: `service/auth/login.go` → `Domain="auth"` → `outDir/auth/login.go`, `package auth`. Flat backward compatible.
 - **guard state codegen**: `guard state {id}` + `@param entity.Field` → `{id}state.CanTransition(entity.Field, "FuncName")`, import `"states/{id}state"`
+- **@func package codegen**: `@func auth.verifyPassword` → `auth.VerifyPassword(auth.VerifyPasswordInput{...})`. @result absent → guard-style (401), @result present → value-style (500)
 
 Singularization rules (sqlc filename → model name): `ies`→`y`, `sses`→`ss`, `xes`→`x`, otherwise remove trailing `s`
 

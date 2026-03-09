@@ -115,7 +115,7 @@ artifacts/service/
 
 기존 flat 구조(`service/*.go`)는 변경 없이 동작한다.
 
-### sequence 타입 (11종)
+### sequence 타입 (10종)
 
 #### authorize — 권한 검증
 
@@ -193,15 +193,6 @@ import: `"states/{stateDiagramID}state"` (상태 머신 패키지는 fullend가 
 // @param <Name> <source>
 ```
 
-#### password — 비밀번호 비교
-
-```go
-// @sequence password
-// @param <hashField>       // 필수: 해시 (e.g. user.PasswordHash)
-// @param <plainField> <source>  // 필수: 평문 (e.g. Password request)
-// @message "커스텀 메시지"   // 선택 (기본: "비밀번호가 일치하지 않습니다")
-```
-
 #### call — 외부 호출
 
 component (등록된 컴포넌트):
@@ -212,12 +203,31 @@ component (등록된 컴포넌트):
 // @result <var> <Type>     // 선택
 ```
 
-func (순수 함수):
+func (패키지 분리 함수):
 ```go
 // @sequence call
-// @func <name>             // 필수 (component과 택일)
+// @func <package>.<funcName>   // 필수 (component과 택일). e.g. auth.verifyPassword
 // @param <args>
-// @result <var> <Type>     // 선택
+// @result <var> <Type>     // 선택: 없으면 guard형 (401), 있으면 value형 (500)
+// @message "커스텀 메시지"  // 선택
+```
+
+코드젠 결과:
+```go
+// guard형 (@result 없음)
+_, err = auth.VerifyPassword(auth.VerifyPasswordInput{PasswordHash: user.PasswordHash, Password: password})
+if err != nil {
+    http.Error(w, "비밀번호가 일치하지 않습니다", http.StatusUnauthorized)
+    return
+}
+
+// value형 (@result 있음)
+out, err := auth.HashPassword(auth.HashPasswordInput{Password: password})
+if err != nil {
+    http.Error(w, "hashPassword 호출 실패", http.StatusInternalServerError)
+    return
+}
+hashedPassword := out.HashedPassword
 ```
 
 #### response — 응답 반환
@@ -262,9 +272,8 @@ func (순수 함수):
 | guard exists (conflict) | "conflict가 이미 존재합니다" |
 | guard state | "상태 전이가 허용되지 않습니다" |
 | authorize | "권한이 없습니다" (Forbidden), "권한 확인 실패" (내부 에러, 고정) |
-| password | "비밀번호가 일치하지 않습니다" |
 | call @component notify | "notify 호출 실패" |
-| call @func calculate | "calculate 호출 실패" |
+| call @func auth.verify | "verifyPassword 호출 실패" |
 
 ---
 
@@ -446,7 +455,7 @@ func ListReservations(w http.ResponseWriter, r *http.Request) {}
 
 - interface 타입명 → component (lcFirst: `Notification` → `notification`)
 - interface 메서드 → 모델 메서드로도 등록
-- 패키지 레벨 func → `@func`으로 참조 가능
+- `@func`은 `package.funcName` 형식 필수 (e.g. `auth.verifyPassword`). 외부 패키지 함수를 호출하는 코드만 생성
 
 ### @dto 태그
 
@@ -541,9 +550,11 @@ import "net/http"
 // @sequence guard nil user
 // @message "사용자를 찾을 수 없습니다"
 
-// @sequence password
+// @sequence call
+// @func auth.verifyPassword
 // @param user.PasswordHash
 // @param Password request
+// @message "비밀번호가 일치하지 않습니다"
 
 // @sequence post
 // @model Session.Create
@@ -564,6 +575,8 @@ package service
 import (
 	"encoding/json"
 	"net/http"
+
+	"<module>/internal/auth"
 )
 
 func Login(w http.ResponseWriter, r *http.Request) {
@@ -583,8 +596,9 @@ func Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// password
-	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
+	// call func
+	_, err = auth.VerifyPassword(auth.VerifyPasswordInput{PasswordHash: user.PasswordHash, Password: password})
+	if err != nil {
 		http.Error(w, "비밀번호가 일치하지 않습니다", http.StatusUnauthorized)
 		return
 	}
