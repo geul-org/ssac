@@ -21,11 +21,13 @@ func ParseDir(dir string) ([]ServiceFunc, error) {
 		if err != nil {
 			return fmt.Errorf("%s 파싱 실패: %w", path, err)
 		}
+		rel, _ := filepath.Rel(dir, path)
+		if filepath.Dir(rel) == "." {
+			return fmt.Errorf("%s — service/ 직접에 SSaC 파일을 둘 수 없습니다. 도메인 서브 폴더를 사용하세요 (예: service/auth/%s)", d.Name(), d.Name())
+		}
 		for i := range sfs {
-			rel, _ := filepath.Rel(dir, path)
-			if parts := strings.Split(filepath.Dir(rel), string(filepath.Separator)); parts[0] != "." {
-				sfs[i].Domain = parts[0]
-			}
+			parts := strings.Split(filepath.Dir(rel), string(filepath.Separator))
+			sfs[i].Domain = parts[0]
 			funcs = append(funcs, sfs[i])
 		}
 		return nil

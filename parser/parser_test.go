@@ -3,6 +3,7 @@ package parser
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -303,6 +304,28 @@ func GetUser(c *gin.Context) {}
 		t.Fatalf("expected 1 import, got %d", len(sfs[0].Imports))
 	}
 	assertEqual(t, "Import", sfs[0].Imports[0], "myapp/billing")
+}
+
+func TestParseFlatServiceError(t *testing.T) {
+	dir := t.TempDir()
+
+	src := `package service
+
+// @get User user = User.FindByEmail(request.Email)
+// @response {
+//   user: user
+// }
+func Login() {}
+`
+	os.WriteFile(filepath.Join(dir, "login.go"), []byte(src), 0644)
+
+	_, err := ParseDir(dir)
+	if err == nil {
+		t.Fatal("expected error for flat service/ file, got nil")
+	}
+	if !strings.Contains(err.Error(), "도메인 서브 폴더를 사용하세요") {
+		t.Errorf("unexpected error: %v", err)
+	}
 }
 
 func TestParseDomainFolder(t *testing.T) {
