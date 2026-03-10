@@ -111,7 +111,7 @@ files/                           # 기초 자료
 ## 외부 검증 프로젝트 구조
 
 `ssac validate <project-root>` 시 자동 감지:
-- `<root>/service/**/*.go` — sequence spec (재귀 탐색, 도메인 폴더 지원)
+- `<root>/service/<domain>/*.go` — sequence spec (도메인 서브 폴더 필수, flat service/*.go는 ERROR)
 - `<root>/db/*.sql` — DDL (CREATE TABLE → 컬럼 타입, FK, Index)
 - `<root>/db/queries/*.sql` — sqlc 쿼리 (파일명→모델, `-- name: Method :cardinality`)
 - `<root>/api/openapi.yaml` — OpenAPI 3.0 (operationId=함수명, x-pagination/sort/filter/include)
@@ -133,8 +133,8 @@ files/                           # 기초 자료
 - **QueryOpts**: SSaC에 `query` 예약 소스가 명시된 메서드에만 `opts QueryOpts` 전달 (암묵적 삽입 없음)
 - **List 3-tuple 반환**: many + QueryOpts → `result, total, err :=` (count 포함)
 - **모델 인터페이스 파생**: 3 SSOT 교차(sqlc 카디널리티 + SSaC Args + OpenAPI x-확장) → `<outDir>/model/models_gen.go`
-- **도메인 폴더 구조**: `service/auth/login.go` → `Domain="auth"` → `outDir/auth/login.go`, `package auth`
-- **@call 코드젠**: `@call pkg.Func(args)` → `pkg.Func(pkg.FuncRequest{args...})` (unkeyed positional). result 없음→`_, err` guard형(401), 있음→value형(500)
+- **도메인 폴더 구조**: `service/<domain>/*.go` 필수 (flat service/*.go는 ERROR). `service/auth/login.go` → `Domain="auth"` → `outDir/auth/login.go`, `package auth`
+- **@call 코드젠**: `@call pkg.Func(args)` → `pkg.Func(pkg.FuncRequest{FieldName: value, ...})` (named field). result 없음→`_, err` guard형(401), 있음→value형(500)
 - **@state 코드젠**: `err := {id}state.CanTransition({id}state.Input{...}, "transition")` (error 반환), import `"states/{id}state"`
 - **@auth 코드젠**: `authz.Check(currentUser, "action", "resource", authz.Input{...})`
 - **Spec 파일 imports**: spec 파일의 Go import 선언이 생성 코드에 전달됨

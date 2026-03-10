@@ -279,7 +279,7 @@ func parseAuth(rest string) *Sequence {
 }
 
 // parseCall은 @call을 파싱한다.
-// Type var = pkg.Func(args) 또는 pkg.Func(args)
+// Type var = pkg.Func({Key: val, ...}) 또는 pkg.Func({Key: val, ...})
 func parseCall(rest string) *Sequence {
 	rest = strings.TrimSpace(rest)
 	seq := &Sequence{Type: SeqCall}
@@ -297,16 +297,33 @@ func parseCall(rest string) *Sequence {
 		}
 		seq.Result = result
 
-		model, args := parseCallExpr(rhs)
+		model, inputs := parseCallExprInputs(rhs)
 		seq.Model = model
-		seq.Args = args
+		seq.Inputs = inputs
 	} else {
-		model, args := parseCallExpr(rest)
+		model, inputs := parseCallExprInputs(rest)
 		seq.Model = model
-		seq.Args = args
+		seq.Inputs = inputs
 	}
 
 	return seq
+}
+
+// parseCallExprInputs는 "pkg.Func({Key: val, ...})"를 파싱한다.
+func parseCallExprInputs(expr string) (string, map[string]string) {
+	expr = strings.TrimSpace(expr)
+	parenIdx := strings.Index(expr, "(")
+	if parenIdx < 0 {
+		return expr, nil
+	}
+	model := expr[:parenIdx]
+	inner := expr[parenIdx+1:]
+	inner = strings.TrimSuffix(strings.TrimSpace(inner), ")")
+	inner = strings.TrimSpace(inner)
+	if inner == "" {
+		return model, nil
+	}
+	return model, parseInputs(inner)
 }
 
 // parseResult는 "Type var" 또는 "[]Type var"를 파싱한다.

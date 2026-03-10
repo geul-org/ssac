@@ -122,13 +122,14 @@ func TestGenerateCallWithResult(t *testing.T) {
 		Imports: []string{"myapp/auth"},
 		Sequences: []parser.Sequence{
 			{Type: parser.SeqGet, Model: "User.FindByEmail", Args: []parser.Arg{{Source: "request", Field: "Email"}}, Result: &parser.Result{Type: "User", Var: "user"}},
-			{Type: parser.SeqCall, Model: "auth.VerifyPassword", Args: []parser.Arg{{Source: "user", Field: "Email"}, {Source: "request", Field: "Password"}}, Result: &parser.Result{Type: "Token", Var: "token"}},
+			{Type: parser.SeqCall, Model: "auth.VerifyPassword", Inputs: map[string]string{"Email": "user.Email", "Password": "request.Password"}, Result: &parser.Result{Type: "Token", Var: "token"}},
 			{Type: parser.SeqResponse, Fields: map[string]string{"token": "token"}},
 		},
 	}
 	code := mustGenerate(t, sf, nil)
 	assertContains(t, code, `auth.VerifyPassword(auth.VerifyPasswordRequest{`)
-	assertContains(t, code, `Email: user.Email, Password: password`)
+	assertContains(t, code, `Email: user.Email`)
+	assertContains(t, code, `Password: password`)
 	assertContains(t, code, `http.StatusInternalServerError`)
 }
 
@@ -136,12 +137,13 @@ func TestGenerateCallWithoutResult(t *testing.T) {
 	sf := parser.ServiceFunc{
 		Name: "Cancel", FileName: "cancel.go",
 		Sequences: []parser.Sequence{
-			{Type: parser.SeqCall, Model: "notification.Send", Args: []parser.Arg{{Source: "reservation", Field: "ID"}, {Literal: "cancelled"}}},
+			{Type: parser.SeqCall, Model: "notification.Send", Inputs: map[string]string{"ID": "reservation.ID", "Status": `"cancelled"`}},
 		},
 	}
 	code := mustGenerate(t, sf, nil)
 	assertContains(t, code, `notification.Send(notification.SendRequest{`)
-	assertContains(t, code, `ID: reservation.ID, Cancelled: "cancelled"`)
+	assertContains(t, code, `ID: reservation.ID`)
+	assertContains(t, code, `Status: "cancelled"`)
 	assertContains(t, code, `_, err :=`)
 	assertContains(t, code, `http.StatusUnauthorized`)
 }
@@ -151,7 +153,7 @@ func TestGenerateCallBareVariable(t *testing.T) {
 		Name: "Register", FileName: "register.go",
 		Imports: []string{"myapp/auth"},
 		Sequences: []parser.Sequence{
-			{Type: parser.SeqCall, Model: "auth.HashPassword", Args: []parser.Arg{{Source: "request", Field: "Password"}}, Result: &parser.Result{Type: "string", Var: "hashedPassword"}},
+			{Type: parser.SeqCall, Model: "auth.HashPassword", Inputs: map[string]string{"Password": "request.Password"}, Result: &parser.Result{Type: "string", Var: "hashedPassword"}},
 			{Type: parser.SeqPost, Model: "User.Create", Args: []parser.Arg{{Source: "request", Field: "Email"}, {Source: "hashedPassword"}, {Source: "request", Field: "Role"}}, Result: &parser.Result{Type: "User", Var: "user"}},
 			{Type: parser.SeqResponse, Fields: map[string]string{"user": "user"}},
 		},
@@ -281,7 +283,7 @@ func TestGenerateFullExample(t *testing.T) {
 			{Type: parser.SeqGet, Model: "Reservation.FindByID", Args: []parser.Arg{{Source: "request", Field: "ReservationID"}}, Result: &parser.Result{Type: "Reservation", Var: "reservation"}},
 			{Type: parser.SeqEmpty, Target: "reservation", Message: "예약을 찾을 수 없습니다"},
 			{Type: parser.SeqState, DiagramID: "reservation", Inputs: map[string]string{"status": "reservation.Status"}, Transition: "cancel", Message: "취소할 수 없습니다"},
-			{Type: parser.SeqCall, Model: "billing.CalculateRefund", Args: []parser.Arg{{Source: "reservation", Field: "ID"}, {Source: "reservation", Field: "StartAt"}, {Source: "reservation", Field: "EndAt"}}, Result: &parser.Result{Type: "Refund", Var: "refund"}},
+			{Type: parser.SeqCall, Model: "billing.CalculateRefund", Inputs: map[string]string{"ID": "reservation.ID", "StartAt": "reservation.StartAt", "EndAt": "reservation.EndAt"}, Result: &parser.Result{Type: "Refund", Var: "refund"}},
 			{Type: parser.SeqPut, Model: "Reservation.UpdateStatus", Args: []parser.Arg{{Source: "request", Field: "ReservationID"}, {Literal: "cancelled"}}},
 			{Type: parser.SeqGet, Model: "Reservation.FindByID", Args: []parser.Arg{{Source: "request", Field: "ReservationID"}}, Result: &parser.Result{Type: "Reservation", Var: "reservation"}},
 			{Type: parser.SeqResponse, Fields: map[string]string{"reservation": "reservation", "refund": "refund"}},

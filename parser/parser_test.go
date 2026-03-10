@@ -214,7 +214,7 @@ func ViewDashboard(c *gin.Context) {}
 func TestParseCallWithResult(t *testing.T) {
 	src := `package service
 
-// @call Token token = auth.VerifyPassword(user.Email, request.Password)
+// @call Token token = auth.VerifyPassword({Email: user.Email, Password: request.Password})
 func Login(c *gin.Context) {}
 `
 	sfs := parseTestFile(t, src)
@@ -226,15 +226,17 @@ func Login(c *gin.Context) {}
 	}
 	assertEqual(t, "Result.Type", seq.Result.Type, "Token")
 	assertEqual(t, "Result.Var", seq.Result.Var, "token")
-	if len(seq.Args) != 2 {
-		t.Fatalf("expected 2 args, got %d", len(seq.Args))
+	if len(seq.Inputs) != 2 {
+		t.Fatalf("expected 2 inputs, got %d", len(seq.Inputs))
 	}
+	assertEqual(t, "Inputs.Email", seq.Inputs["Email"], "user.Email")
+	assertEqual(t, "Inputs.Password", seq.Inputs["Password"], "request.Password")
 }
 
 func TestParseCallWithoutResult(t *testing.T) {
 	src := `package service
 
-// @call notification.Send(reservation.ID, "cancelled")
+// @call notification.Send({ID: reservation.ID, Status: "cancelled"})
 func CancelReservation(c *gin.Context) {}
 `
 	sfs := parseTestFile(t, src)
@@ -244,7 +246,11 @@ func CancelReservation(c *gin.Context) {}
 	if seq.Result != nil {
 		t.Fatal("expected no result")
 	}
-	assertEqual(t, "Arg1.Literal", seq.Args[1].Literal, "cancelled")
+	if len(seq.Inputs) != 2 {
+		t.Fatalf("expected 2 inputs, got %d", len(seq.Inputs))
+	}
+	assertEqual(t, "Inputs.ID", seq.Inputs["ID"], "reservation.ID")
+	assertEqual(t, "Inputs.Status", seq.Inputs["Status"], `"cancelled"`)
 }
 
 func TestParseResponse(t *testing.T) {
@@ -362,7 +368,7 @@ import "myapp/auth"
 // @get Reservation reservation = Reservation.FindByID(request.ReservationID)
 // @empty reservation "예약을 찾을 수 없습니다"
 // @state reservation {status: reservation.Status} "cancel" "취소할 수 없습니다"
-// @call Refund refund = billing.CalculateRefund(reservation.ID, reservation.StartAt, reservation.EndAt)
+// @call Refund refund = billing.CalculateRefund({ID: reservation.ID, StartAt: reservation.StartAt, EndAt: reservation.EndAt})
 // @put Reservation.UpdateStatus(request.ReservationID, "cancelled")
 // @get Reservation reservation = Reservation.FindByID(request.ReservationID)
 // @response {

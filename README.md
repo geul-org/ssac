@@ -5,8 +5,8 @@ Service logic is a series of decisions: which model to query, what to guard agai
 SSaC preserves those decisions as a declarative spec. You declare **what** happens and **in what order**. The tool generates the implementation.
 
 ```
-specs/service/*.go  →  ssac validate  →  ssac gen  →  artifacts/service/*.go
-   (comment DSL)        (validation)      (codegen)     (gofmt applied)
+specs/service/<domain>/*.go  →  ssac validate  →  ssac gen  →  artifacts/<domain>/*.go
+       (comment DSL)              (validation)      (codegen)     (gofmt applied)
 ```
 
 ## Core Idea
@@ -134,8 +134,8 @@ When external SSOT (symbol table) is available, `ssac gen` adds:
   - sqlc: method names + cardinality (`:one`→`*T`, `:many`→`[]T`, `:exec`→`error`)
   - SSaC: all args included (request, currentUser, variable refs, literals→DDL reverse-mapping, query→`opts QueryOpts`)
   - OpenAPI x-extensions: validated against SSaC `query` usage
-- **Domain folder structure**: `service/auth/login.go` → outputs to `outDir/auth/login.go` with `package auth`
-- **@call codegen**: `pkg.Func(pkg.FuncRequest{args...})` (unkeyed positional). No result → `_, err` guard-style (401), with result → value-style (500)
+- **Domain folder structure**: `service/<domain>/*.go` required (flat service/*.go is ERROR). `service/auth/login.go` → outputs to `outDir/auth/login.go` with `package auth`
+- **@call codegen**: `pkg.Func(pkg.FuncRequest{FieldName: value, ...})` (named fields). No result → `_, err` guard-style (401), with result → value-style (500)
 - **@state codegen**: `err := {id}state.CanTransition({id}state.Input{...}, "transition")` (returns error, not bool)
 - **@auth codegen**: `authz.Check(currentUser, "action", "resource", authz.Input{...})`
 - **Spec file imports**: Go import declarations in spec files are passed to generated code
@@ -189,7 +189,7 @@ files/                           # Design documents
 
 ```
 <project>/
-  service/**/*.go         # Sequence specs (recursive, domain folders supported)
+  service/<domain>/*.go   # Sequence specs (domain subfolder required, flat is ERROR)
   db/*.sql                # DDL (CREATE TABLE → column types, FK, indexes)
   db/queries/*.sql        # sqlc queries (-- name: Method :cardinality)
   api/openapi.yaml        # OpenAPI 3.0 (operationId = function name, x-extensions)
@@ -202,7 +202,7 @@ files/                           # Design documents
 go test ./parser/... ./validator/... ./generator/... -count=1
 ```
 
-81 tests: parser 25 + validator 34 + generator 22
+83 tests: parser 26 + validator 34 + generator 23
 
 ## License
 

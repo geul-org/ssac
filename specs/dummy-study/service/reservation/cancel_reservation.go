@@ -8,7 +8,7 @@ import _ "github.com/geul-org/fullend/pkg/billing"
 // @get Reservation reservation = Reservation.FindByID(request.ReservationID)
 // @empty reservation "예약을 찾을 수 없습니다"
 // @state reservation {status: reservation.Status} "cancel" "취소할 수 없는 상태입니다"
-// @call Refund refund = billing.CalculateRefund(reservation.ID, reservation.StartAt, reservation.EndAt)
+// @call Refund refund = billing.CalculateRefund({ID: reservation.ID, StartAt: reservation.StartAt, EndAt: reservation.EndAt})
 // @put Reservation.UpdateStatus(request.ReservationID, "cancelled")
 // @get Reservation reservation = Reservation.FindByID(request.ReservationID)
 // @response {

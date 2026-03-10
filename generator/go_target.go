@@ -237,9 +237,6 @@ func buildTemplateData(seq parser.Sequence, errDeclared *bool, declaredVars map[
 	if len(seq.Inputs) > 0 {
 		d.InputFields = buildInputFieldsFromMap(seq.Inputs)
 	}
-	if seq.Type == parser.SeqCall {
-		d.InputFields = buildCallInputFields(seq.Args)
-	}
 
 	// Response
 	d.ResponseFields = seq.Fields
@@ -348,28 +345,6 @@ func inputValueToCode(val string) string {
 	return val
 }
 
-// buildCallInputFields는 @call의 Args를 named field 형식으로 변환한다.
-// 필드명은 arg의 Field(있으면) 또는 ucFirst(Source)(bare variable)에서 도출한다.
-func buildCallInputFields(args []parser.Arg) string {
-	var fields []string
-	for _, a := range args {
-		name := callFieldName(a)
-		value := argToCode(a)
-		fields = append(fields, name+": "+value)
-	}
-	return strings.Join(fields, ", ")
-}
-
-// callFieldName은 @call arg에서 Request struct 필드명을 도출한다.
-func callFieldName(a parser.Arg) string {
-	if a.Literal != "" {
-		return ucFirst(a.Literal)
-	}
-	if a.Field != "" {
-		return a.Field
-	}
-	return ucFirst(a.Source)
-}
 
 // --- request parameter extraction ---
 
