@@ -488,46 +488,6 @@ func TestValidateReservedSourceNonReservedOK(t *testing.T) {
 	}
 }
 
-// --- 외부 검증: CurrentUser 타입 ---
-
-func TestValidateCurrentUserTypeMissing(t *testing.T) {
-	st := &SymbolTable{
-		Models:     map[string]ModelSymbol{},
-		Operations: map[string]OperationSymbol{},
-		DDLTables:  map[string]DDLTable{},
-		// HasCurrentUserType: false (기본값)
-	}
-	funcs := []parser.ServiceFunc{{
-		Name: "CreateReservation", FileName: "create_reservation.go",
-		Sequences: []parser.Sequence{
-			{Type: parser.SeqAuth, Action: "create", Resource: "reservation", Inputs: map[string]string{"id": "request.ID"}, Message: "권한 없음"},
-		},
-	}}
-	errs := ValidateWithSymbols(funcs, st)
-	assertHasWarning(t, errs, "CurrentUser 타입이 정의되지 않았습니다")
-}
-
-func TestValidateCurrentUserTypeExists(t *testing.T) {
-	st := &SymbolTable{
-		Models:             map[string]ModelSymbol{},
-		Operations:         map[string]OperationSymbol{},
-		DDLTables:          map[string]DDLTable{},
-		HasCurrentUserType: true,
-	}
-	funcs := []parser.ServiceFunc{{
-		Name: "CreateReservation", FileName: "create_reservation.go",
-		Sequences: []parser.Sequence{
-			{Type: parser.SeqAuth, Action: "create", Resource: "reservation", Inputs: map[string]string{"id": "request.ID"}, Message: "권한 없음"},
-		},
-	}}
-	errs := ValidateWithSymbols(funcs, st)
-	for _, e := range errs {
-		if e.IsWarning() && contains(e.Message, "CurrentUser") {
-			t.Errorf("unexpected CurrentUser warning: %s", e.Message)
-		}
-	}
-}
-
 // --- helpers ---
 
 func assertHasError(t *testing.T, errs []ValidationError, substr string) {

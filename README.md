@@ -134,7 +134,7 @@ When external SSOT (symbol table) is available, `ssac gen` adds:
   - SSaC: all args included (request, currentUser, variable refs, literals→DDL reverse-mapping)
   - OpenAPI x-extensions → `opts QueryOpts` parameter added
 - **Domain folder structure**: `service/auth/login.go` → outputs to `outDir/auth/login.go` with `package auth`
-- **@call codegen**: `pkg.Func(pkg.FuncRequest{...})`. No result → guard-style (401), with result → value-style (500)
+- **@call codegen**: `pkg.Func(pkg.FuncRequest{args...})` (unkeyed positional). No result → `_, err` guard-style (401), with result → value-style (500)
 - **@state codegen**: `{id}state.CanTransition({id}state.Input{...}, "transition")`
 - **@auth codegen**: `authz.Check(currentUser, "action", "resource", authz.Input{...})`
 - **Spec file imports**: Go import declarations in spec files are passed to generated code
@@ -201,7 +201,7 @@ files/                           # Design documents
 go test ./parser/... ./validator/... ./generator/... -count=1
 ```
 
-78 tests: parser 25 + validator 33 + generator 20
+76 tests: parser 25 + validator 31 + generator 20
 
 ## License
 

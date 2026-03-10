@@ -193,7 +193,7 @@ Additional features when symbol table (external SSOT) is available:
 - **Domain folder structure**: `service/auth/login.go` → `Domain="auth"` → `outDir/auth/login.go`, `package auth`
 - **@state codegen**: `@state {id} {inputs} "transition"` → `{id}state.CanTransition({id}state.Input{...}, "transition")`, import `"states/{id}state"`
 - **@auth codegen**: `@auth "action" "resource" {inputs}` → `authz.Check(currentUser, "action", "resource", authz.Input{...})`
-- **@call codegen**: `@call pkg.Func(args)` → `pkg.Func(pkg.FuncRequest{...})`. No result → guard-style (401), with result → value-style (500)
+- **@call codegen**: `@call pkg.Func(args)` → `pkg.Func(pkg.FuncRequest{args...})` (unkeyed positional). No result → `_, err` guard-style (401), with result → value-style (500)
 - **Spec file imports**: Parser collects Go import declarations from spec files and passes them to generated code
 
 Singularization rules (sqlc filename → model name): `ies`→`y`, `sses`→`ss`, `xes`→`x`, otherwise remove trailing `s`
@@ -231,4 +231,4 @@ Codegen effects:
 - Filenames: snake_case, variables/functions: camelCase, types: PascalCase
 - Go common initialisms: `ID`, `URL`, `HTTP`, `API` etc. — all-caps (exported) or all-lowercase (unexported first word)
 - Tests: `go test ./parser/... ./validator/... ./generator/... -count=1`
-- 78 tests: parser 25 + validator 33 + generator 20
+- 76 tests: parser 25 + validator 31 + generator 20

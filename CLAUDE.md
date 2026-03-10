@@ -133,7 +133,7 @@ files/                           # 기초 자료
 - **List 3-tuple 반환**: many + QueryOpts → `result, total, err :=` (count 포함)
 - **모델 인터페이스 파생**: 3 SSOT 교차(sqlc 카디널리티 + SSaC Args + OpenAPI x-확장) → `<outDir>/model/models_gen.go`
 - **도메인 폴더 구조**: `service/auth/login.go` → `Domain="auth"` → `outDir/auth/login.go`, `package auth`
-- **@call 코드젠**: `@call pkg.Func(args)` → `pkg.Func(pkg.FuncRequest{...})`. result 없음→guard형(401), 있음→value형(500)
+- **@call 코드젠**: `@call pkg.Func(args)` → `pkg.Func(pkg.FuncRequest{args...})` (unkeyed positional). result 없음→`_, err` guard형(401), 있음→value형(500)
 - **@state 코드젠**: `{id}state.CanTransition({id}state.Input{...}, "transition")`, import `"states/{id}state"`
 - **@auth 코드젠**: `authz.Check(currentUser, "action", "resource", authz.Input{...})`
 - **Spec 파일 imports**: spec 파일의 Go import 선언이 생성 코드에 전달됨

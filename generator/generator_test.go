@@ -126,8 +126,7 @@ func TestGenerateCallWithResult(t *testing.T) {
 	}
 	code := mustGenerate(t, sf, nil)
 	assertContains(t, code, `auth.VerifyPassword(auth.VerifyPasswordRequest{`)
-	assertContains(t, code, `Email: user.Email`)
-	assertContains(t, code, `Password: password`)
+	assertContains(t, code, `user.Email, password`)
 	assertContains(t, code, `http.StatusInternalServerError`)
 }
 
@@ -140,6 +139,8 @@ func TestGenerateCallWithoutResult(t *testing.T) {
 	}
 	code := mustGenerate(t, sf, nil)
 	assertContains(t, code, `notification.Send(notification.SendRequest{`)
+	assertContains(t, code, `reservation.ID, "cancelled"`)
+	assertContains(t, code, `_, err :=`)
 	assertContains(t, code, `http.StatusUnauthorized`)
 }
 

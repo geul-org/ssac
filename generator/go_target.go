@@ -348,17 +348,12 @@ func inputValueToCode(val string) string {
 	return val
 }
 
-// buildCallInputFields는 @call의 Args를 Input struct 필드로 변환한다.
+// buildCallInputFields는 @call의 Args를 위치 기반 초기화(unkeyed literal)로 변환한다.
+// 외부 패키지의 Request 구조체 필드명을 알 수 없으므로 위치 기반으로 매핑한다.
 func buildCallInputFields(args []parser.Arg) string {
 	var fields []string
 	for _, a := range args {
-		if a.Literal != "" {
-			fields = append(fields, `"` + a.Literal + `"`)
-			continue
-		}
-		fieldName := ucFirst(a.Field)
-		value := argToCode(a)
-		fields = append(fields, fieldName+": "+value)
+		fields = append(fields, argToCode(a))
 	}
 	return strings.Join(fields, ", ")
 }

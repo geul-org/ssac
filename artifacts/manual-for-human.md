@@ -311,11 +311,7 @@ if err := authz.Check(currentUser, "cancel", "reservation", authz.Input{
 
 코드젠 (guard형):
 ```go
-_, err = auth.VerifyPassword(auth.VerifyPasswordRequest{
-    PasswordHash: user.PasswordHash,
-    Password:     password,
-})
-if err != nil {
+if _, err = auth.VerifyPassword(auth.VerifyPasswordRequest{user.PasswordHash, password}); err != nil {
     c.JSON(http.StatusUnauthorized, gin.H{"error": "verifyPassword 호출 실패"})
     return
 }
@@ -323,16 +319,11 @@ if err != nil {
 
 코드젠 (value형):
 ```go
-out, err := billing.CalculateRefund(billing.CalculateRefundRequest{
-    ID:      reservation.ID,
-    StartAt: reservation.StartAt,
-    EndAt:   reservation.EndAt,
-})
+refund, err := billing.CalculateRefund(billing.CalculateRefundRequest{reservation.ID, reservation.StartAt, reservation.EndAt})
 if err != nil {
     c.JSON(http.StatusInternalServerError, gin.H{"error": "calculateRefund 호출 실패"})
     return
 }
-refund := out
 ```
 
 ### @response — 응답 반환 (필드 매핑 블록)

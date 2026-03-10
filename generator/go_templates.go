@@ -76,7 +76,7 @@ var goTemplates = template.Must(template.New("").Parse(`
 {{end}}
 
 {{- define "call_no_result" -}}
-	if err {{if .FirstErr}}:={{else}}={{end}} {{.PkgName}}.{{.FuncMethod}}({{.PkgName}}.{{.FuncMethod}}Request{ {{.InputFields}} }); err != nil {
+	if _, err {{if .FirstErr}}:={{else}}={{end}} {{.PkgName}}.{{.FuncMethod}}({{.PkgName}}.{{.FuncMethod}}Request{ {{.InputFields}} }); err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "{{.Message}}"})
 		return
 	}

@@ -23,7 +23,6 @@ func ValidateWithSymbols(funcs []parser.ServiceFunc, st *SymbolTable) []Validati
 		errs = append(errs, validateModel(sf, st)...)
 		errs = append(errs, validateRequest(sf, st)...)
 		errs = append(errs, validateResponse(sf, st)...)
-		errs = append(errs, validateCurrentUserType(sf, st)...)
 	}
 	return errs
 }
@@ -397,52 +396,6 @@ func validateReservedSourceConflict(sf parser.ServiceFunc) []ValidationError {
 		}
 	}
 	return errs
-}
-
-// validateCurrentUserType는 currentUser를 사용하는데 model/에 CurrentUser 타입이 없으면 WARNING을 반환한다.
-func validateCurrentUserType(sf parser.ServiceFunc, st *SymbolTable) []ValidationError {
-	if st == nil {
-		return nil
-	}
-
-	usesCurrentUser := false
-	for _, seq := range sf.Sequences {
-		if seq.Type == parser.SeqAuth {
-			usesCurrentUser = true
-			break
-		}
-		for _, a := range seq.Args {
-			if a.Source == "currentUser" {
-				usesCurrentUser = true
-				break
-			}
-		}
-		for _, val := range seq.Inputs {
-			if strings.HasPrefix(val, "currentUser.") {
-				usesCurrentUser = true
-				break
-			}
-		}
-		if usesCurrentUser {
-			break
-		}
-	}
-
-	if !usesCurrentUser {
-		return nil
-	}
-
-	if !st.HasCurrentUserType {
-		return []ValidationError{{
-			FileName: sf.FileName,
-			FuncName: sf.Name,
-			SeqIndex: -1,
-			Tag:      "@currentUser",
-			Message:  "currentUser를 사용하지만 model/에 CurrentUser 타입이 정의되지 않았습니다",
-			Level:    "WARNING",
-		}}
-	}
-	return nil
 }
 
 // argVarRef는 Arg가 변수 참조인 경우 루트 변수명을 반환한다.
