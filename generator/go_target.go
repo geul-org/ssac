@@ -352,7 +352,18 @@ func inputValueToCode(val string) string {
 	if strings.HasPrefix(val, "request.") {
 		return lcFirst(val[len("request."):])
 	}
-	// currentUser.Field, config.Field, 일반 변수 → 그대로
+	if strings.HasPrefix(val, "currentUser.") || strings.HasPrefix(val, "config.") {
+		return val
+	}
+	// 리터럴
+	if strings.HasPrefix(val, `"`) {
+		return val
+	}
+	// 모델 result 변수 필드 → 포인터 역참조
+	if strings.ContainsRune(val, '.') {
+		return "*" + val
+	}
+	// bare variable (hashedPassword 등)
 	return val
 }
 
