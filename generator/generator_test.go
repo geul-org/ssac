@@ -2,8 +2,6 @@ package generator
 
 import (
 	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -11,607 +9,322 @@ import (
 	"github.com/geul-org/ssac/validator"
 )
 
-func specsDir() string {
-	_, file, _, _ := runtime.Caller(0)
-	return filepath.Join(filepath.Dir(file), "..", "testdata", "backend-service")
+func TestGenerateGet(t *testing.T) {
+	sf := parser.ServiceFunc{
+		Name: "GetCourse", FileName: "get_course.go",
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqGet, Model: "Course.FindByID", Args: []parser.Arg{{Source: "request", Field: "CourseID"}}, Result: &parser.Result{Type: "Course", Var: "course"}},
+			{Type: parser.SeqResponse, Fields: map[string]string{"course": "course"}},
+		},
+	}
+	code := mustGenerate(t, sf, nil)
+	assertContains(t, code, `course, err := courseModel.FindByID(courseID)`)
+	assertContains(t, code, `courseID := c.Query("CourseID")`)
+	assertContains(t, code, `"course": course`)
 }
 
-func TestGenerateCreateSession(t *testing.T) {
-	sf, err := parser.ParseFile(filepath.Join(specsDir(), "create_session.go"))
-	if err != nil {
-		t.Fatalf("파싱 실패: %v", err)
+func TestGeneratePost(t *testing.T) {
+	sf := parser.ServiceFunc{
+		Name: "CreateSession", FileName: "create_session.go",
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqPost, Model: "Session.Create", Args: []parser.Arg{{Source: "request", Field: "ProjectID"}, {Source: "request", Field: "Command"}}, Result: &parser.Result{Type: "Session", Var: "session"}},
+			{Type: parser.SeqResponse, Fields: map[string]string{"session": "session"}},
+		},
 	}
-
-	code, err := GenerateFunc(*sf, nil)
-	if err != nil {
-		t.Fatalf("코드 생성 실패: %v", err)
-	}
-
-	got := string(code)
-
-	// 핵심 코드 블록 존재 확인
-	checks := []struct {
-		label string
-		want  string
-	}{
-		{"package", "package service"},
-		{"import gin", `"github.com/gin-gonic/gin"`},
-		{"import http", `"net/http"`},
-		{"func sig", "func CreateSession(c *gin.Context)"},
-		{"request param", `projectID := c.Query("ProjectID")`},
-		{"request param", `command := c.Query("Command")`},
-		{"get model call", "projectModel.FindByID(projectID)"},
-		{"get result", "project, err :="},
-		{"guard nil", "if project == nil"},
-		{"guard nil message", `"프로젝트가 존재하지 않습니다"`},
-		{"post model call", "sessionModel.Create(projectID, command)"},
-		{"post result", "session, err :="},
-		{"response json", "c.JSON(http.StatusOK, gin.H{"},
-		{"response var", `"session": session`},
-	}
-
-	for _, c := range checks {
-		if !strings.Contains(got, c.want) {
-			t.Errorf("[%s] %q 없음\n--- got ---\n%s", c.label, c.want, got)
-		}
-	}
-
-	// encoding/json은 사용되지 않아야 함
-	if strings.Contains(got, `"encoding/json"`) {
-		t.Errorf("encoding/json이 포함되면 안 됨\n--- got ---\n%s", got)
-	}
+	code := mustGenerate(t, sf, nil)
+	assertContains(t, code, `session, err := sessionModel.Create(projectID, command)`)
+	assertContains(t, code, `"session": session`)
 }
 
-func TestGenerateDeleteProject(t *testing.T) {
-	sf, err := parser.ParseFile(filepath.Join(specsDir(), "delete_project.go"))
-	if err != nil {
-		t.Fatalf("파싱 실패: %v", err)
+func TestGeneratePut(t *testing.T) {
+	sf := parser.ServiceFunc{
+		Name: "UpdateCourse", FileName: "update_course.go",
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqPut, Model: "Course.Update", Args: []parser.Arg{{Source: "request", Field: "Title"}, {Source: "course", Field: "ID"}}},
+		},
 	}
-
-	code, err := GenerateFunc(*sf, nil)
-	if err != nil {
-		t.Fatalf("코드 생성 실패: %v", err)
-	}
-
-	got := string(code)
-
-	checks := []struct {
-		label string
-		want  string
-	}{
-		{"func sig", "func DeleteProject(c *gin.Context)"},
-		{"currentUser extraction", `c.MustGet("currentUser")`},
-		{"authorize check", `authz.Check(currentUser, "delete", "project", projectID)`},
-		{"authorize err", "allowed, err :="},
-		{"authorize forbidden", "if !allowed"},
-		{"get project", "projectModel.FindByID(projectID)"},
-		{"guard nil project", "if project == nil"},
-		{"get sessionCount", "sessionModel.CountByProjectID(projectID)"},
-		{"guard exists", "if sessionCount > 0"},
-		{"guard exists msg", "하위 세션이 존재하여 삭제할 수 없습니다"},
-		{"call func", "cleanup.ProjectResources(cleanup.ProjectResourcesRequest{"},
-		{"delete", "projectModel.Delete(projectID)"},
-		{"error response gin", "c.JSON(http.StatusInternalServerError, gin.H{"},
-	}
-
-	for _, c := range checks {
-		if !strings.Contains(got, c.want) {
-			t.Errorf("[%s] %q 없음\n--- got ---\n%s", c.label, c.want, got)
-		}
-	}
+	code := mustGenerate(t, sf, nil)
+	assertContains(t, code, `err := courseModel.Update(title, course.ID)`)
 }
 
-func TestGenerateGofmt(t *testing.T) {
-	sf, err := parser.ParseFile(filepath.Join(specsDir(), "create_session.go"))
-	if err != nil {
-		t.Fatalf("파싱 실패: %v", err)
+func TestGenerateDelete(t *testing.T) {
+	sf := parser.ServiceFunc{
+		Name: "CancelReservation", FileName: "cancel_reservation.go",
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqGet, Model: "Reservation.FindByID", Args: []parser.Arg{{Source: "request", Field: "ID"}}, Result: &parser.Result{Type: "Reservation", Var: "reservation"}},
+			{Type: parser.SeqDelete, Model: "Reservation.Cancel", Args: []parser.Arg{{Source: "reservation", Field: "ID"}}},
+		},
 	}
-
-	code, err := GenerateFunc(*sf, nil)
-	if err != nil {
-		t.Fatalf("코드 생성 실패: %v", err)
-	}
-
-	// gofmt가 적용되면 탭 인덴트가 있어야 함
-	if !strings.Contains(string(code), "\t") {
-		t.Error("gofmt 적용 안 됨: 탭 인덴트 없음")
-	}
+	code := mustGenerate(t, sf, nil)
+	assertContains(t, code, `err = reservationModel.Cancel(reservation.ID)`)
 }
 
-func TestGenerateDir(t *testing.T) {
-	funcs, err := parser.ParseDir(specsDir())
-	if err != nil {
-		t.Fatalf("파싱 실패: %v", err)
+func TestGenerateEmpty(t *testing.T) {
+	sf := parser.ServiceFunc{
+		Name: "GetCourse", FileName: "get_course.go",
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqGet, Model: "Course.FindByID", Args: []parser.Arg{{Source: "request", Field: "ID"}}, Result: &parser.Result{Type: "Course", Var: "course"}},
+			{Type: parser.SeqEmpty, Target: "course", Message: "코스를 찾을 수 없습니다"},
+			{Type: parser.SeqResponse, Fields: map[string]string{"course": "course"}},
+		},
 	}
+	code := mustGenerate(t, sf, nil)
+	assertContains(t, code, `if course == nil`)
+	assertContains(t, code, `코스를 찾을 수 없습니다`)
+}
+
+func TestGenerateExists(t *testing.T) {
+	sf := parser.ServiceFunc{
+		Name: "CreateCourse", FileName: "create_course.go",
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqGet, Model: "Course.FindByTitle", Args: []parser.Arg{{Source: "request", Field: "Title"}}, Result: &parser.Result{Type: "Course", Var: "existing"}},
+			{Type: parser.SeqExists, Target: "existing", Message: "이미 존재합니다"},
+		},
+	}
+	code := mustGenerate(t, sf, nil)
+	assertContains(t, code, `if existing != nil`)
+	assertContains(t, code, `이미 존재합니다`)
+}
+
+func TestGenerateState(t *testing.T) {
+	sf := parser.ServiceFunc{
+		Name: "CancelReservation", FileName: "cancel_reservation.go",
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqGet, Model: "Reservation.FindByID", Args: []parser.Arg{{Source: "request", Field: "ID"}}, Result: &parser.Result{Type: "Reservation", Var: "reservation"}},
+			{Type: parser.SeqState, DiagramID: "reservation", Inputs: map[string]string{"status": "reservation.Status"}, Transition: "cancel", Message: "취소할 수 없습니다"},
+		},
+	}
+	code := mustGenerate(t, sf, nil)
+	assertContains(t, code, `reservationstate.CanTransition(reservationstate.Input{`)
+	assertContains(t, code, `Status: reservation.Status`)
+	assertContains(t, code, `"cancel"`)
+}
+
+func TestGenerateAuth(t *testing.T) {
+	sf := parser.ServiceFunc{
+		Name: "DeleteProject", FileName: "delete_project.go",
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqAuth, Action: "delete", Resource: "project", Inputs: map[string]string{"id": "project.ID", "owner": "project.OwnerID"}, Message: "권한 없음"},
+		},
+	}
+	code := mustGenerate(t, sf, nil)
+	assertContains(t, code, `authz.Check(currentUser, "delete", "project", authz.Input{`)
+	assertContains(t, code, `Id: project.ID`)
+	assertContains(t, code, `Owner: project.OwnerID`)
+	assertContains(t, code, `currentUser := c.MustGet("currentUser")`)
+}
+
+func TestGenerateCallWithResult(t *testing.T) {
+	sf := parser.ServiceFunc{
+		Name: "Login", FileName: "login.go",
+		Imports: []string{"myapp/auth"},
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqGet, Model: "User.FindByEmail", Args: []parser.Arg{{Source: "request", Field: "Email"}}, Result: &parser.Result{Type: "User", Var: "user"}},
+			{Type: parser.SeqCall, Model: "auth.VerifyPassword", Args: []parser.Arg{{Source: "user", Field: "Email"}, {Source: "request", Field: "Password"}}, Result: &parser.Result{Type: "Token", Var: "token"}},
+			{Type: parser.SeqResponse, Fields: map[string]string{"token": "token"}},
+		},
+	}
+	code := mustGenerate(t, sf, nil)
+	assertContains(t, code, `auth.VerifyPassword(auth.VerifyPasswordRequest{`)
+	assertContains(t, code, `Email: user.Email`)
+	assertContains(t, code, `Password: password`)
+	assertContains(t, code, `http.StatusInternalServerError`)
+}
+
+func TestGenerateCallWithoutResult(t *testing.T) {
+	sf := parser.ServiceFunc{
+		Name: "Cancel", FileName: "cancel.go",
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqCall, Model: "notification.Send", Args: []parser.Arg{{Source: "reservation", Field: "ID"}, {Literal: "cancelled"}}},
+		},
+	}
+	code := mustGenerate(t, sf, nil)
+	assertContains(t, code, `notification.Send(notification.SendRequest{`)
+	assertContains(t, code, `http.StatusUnauthorized`)
+}
+
+func TestGenerateResponse(t *testing.T) {
+	sf := parser.ServiceFunc{
+		Name: "GetCourse", FileName: "get_course.go",
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqGet, Model: "Course.FindByID", Args: []parser.Arg{{Source: "request", Field: "ID"}}, Result: &parser.Result{Type: "Course", Var: "course"}},
+			{Type: parser.SeqGet, Model: "User.FindByID", Args: []parser.Arg{{Source: "course", Field: "InstructorID"}}, Result: &parser.Result{Type: "User", Var: "instructor"}},
+			{Type: parser.SeqResponse, Fields: map[string]string{"course": "course", "instructor_name": "instructor.Name"}},
+		},
+	}
+	code := mustGenerate(t, sf, nil)
+	assertContains(t, code, `"course":`)
+	assertContains(t, code, `"instructor_name":`)
+	assertContains(t, code, `instructor.Name`)
+}
+
+func TestGenerateCurrentUser(t *testing.T) {
+	sf := parser.ServiceFunc{
+		Name: "ListMy", FileName: "list_my.go",
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqGet, Model: "Item.ListByUser", Args: []parser.Arg{{Source: "currentUser", Field: "ID"}}, Result: &parser.Result{Type: "[]Item", Var: "items"}},
+			{Type: parser.SeqResponse, Fields: map[string]string{"items": "items"}},
+		},
+	}
+	code := mustGenerate(t, sf, nil)
+	assertContains(t, code, `currentUser := c.MustGet("currentUser")`)
+	assertContains(t, code, `itemModel.ListByUser(currentUser.ID)`)
+}
+
+func TestGenerateWithPathParam(t *testing.T) {
+	st := &validator.SymbolTable{
+		Models:    map[string]validator.ModelSymbol{},
+		DDLTables: map[string]validator.DDLTable{},
+		Operations: map[string]validator.OperationSymbol{
+			"GetCourse": {
+				PathParams:     []validator.PathParam{{Name: "CourseID", GoType: "int64"}},
+				RequestFields:  map[string]bool{"CourseID": true},
+				ResponseFields: map[string]bool{"course": true},
+			},
+		},
+	}
+	sf := parser.ServiceFunc{
+		Name: "GetCourse", FileName: "get_course.go",
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqGet, Model: "Course.FindByID", Args: []parser.Arg{{Source: "request", Field: "CourseID"}}, Result: &parser.Result{Type: "Course", Var: "course"}},
+			{Type: parser.SeqResponse, Fields: map[string]string{"course": "course"}},
+		},
+	}
+	code := mustGenerate(t, sf, st)
+	assertContains(t, code, `c.Param("CourseID")`)
+	assertContains(t, code, `strconv.ParseInt`)
+}
+
+func TestGenerateWithJSONBody(t *testing.T) {
+	st := &validator.SymbolTable{
+		Models: map[string]validator.ModelSymbol{},
+		DDLTables: map[string]validator.DDLTable{
+			"sessions": {Columns: map[string]string{"project_id": "int64", "command": "string"}},
+		},
+		Operations: map[string]validator.OperationSymbol{},
+	}
+	sf := parser.ServiceFunc{
+		Name: "CreateSession", FileName: "create_session.go",
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqPost, Model: "Session.Create", Args: []parser.Arg{{Source: "request", Field: "ProjectID"}, {Source: "request", Field: "Command"}}, Result: &parser.Result{Type: "Session", Var: "session"}},
+			{Type: parser.SeqResponse, Fields: map[string]string{"session": "session"}},
+		},
+	}
+	code := mustGenerate(t, sf, st)
+	assertContains(t, code, `ShouldBindJSON(&req)`)
+	assertContains(t, code, `ProjectID int64`)
+}
+
+func TestGenerateDomainPackage(t *testing.T) {
+	sf := parser.ServiceFunc{
+		Name: "Login", FileName: "login.go", Domain: "auth",
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqGet, Model: "User.FindByEmail", Args: []parser.Arg{{Source: "request", Field: "Email"}}, Result: &parser.Result{Type: "User", Var: "user"}},
+			{Type: parser.SeqResponse, Fields: map[string]string{"user": "user"}},
+		},
+	}
+	code := mustGenerate(t, sf, nil)
+	assertContains(t, code, "package auth")
+}
+
+func TestGenerateFullExample(t *testing.T) {
+	sf := parser.ServiceFunc{
+		Name: "CancelReservation", FileName: "cancel_reservation.go",
+		Imports: []string{"myapp/billing"},
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqAuth, Action: "cancel", Resource: "reservation", Inputs: map[string]string{"id": "request.ReservationID"}, Message: "권한 없음"},
+			{Type: parser.SeqGet, Model: "Reservation.FindByID", Args: []parser.Arg{{Source: "request", Field: "ReservationID"}}, Result: &parser.Result{Type: "Reservation", Var: "reservation"}},
+			{Type: parser.SeqEmpty, Target: "reservation", Message: "예약을 찾을 수 없습니다"},
+			{Type: parser.SeqState, DiagramID: "reservation", Inputs: map[string]string{"status": "reservation.Status"}, Transition: "cancel", Message: "취소할 수 없습니다"},
+			{Type: parser.SeqCall, Model: "billing.CalculateRefund", Args: []parser.Arg{{Source: "reservation", Field: "ID"}, {Source: "reservation", Field: "StartAt"}, {Source: "reservation", Field: "EndAt"}}, Result: &parser.Result{Type: "Refund", Var: "refund"}},
+			{Type: parser.SeqPut, Model: "Reservation.UpdateStatus", Args: []parser.Arg{{Source: "request", Field: "ReservationID"}, {Literal: "cancelled"}}},
+			{Type: parser.SeqGet, Model: "Reservation.FindByID", Args: []parser.Arg{{Source: "request", Field: "ReservationID"}}, Result: &parser.Result{Type: "Reservation", Var: "reservation"}},
+			{Type: parser.SeqResponse, Fields: map[string]string{"reservation": "reservation", "refund": "refund"}},
+		},
+	}
+	code := mustGenerate(t, sf, nil)
+
+	// auth
+	assertContains(t, code, `authz.Check(currentUser`)
+	// get
+	assertContains(t, code, `reservation, err := reservationModel.FindByID`)
+	// empty
+	assertContains(t, code, `if reservation == nil`)
+	// state
+	assertContains(t, code, `reservationstate.CanTransition`)
+	// call
+	assertContains(t, code, `billing.CalculateRefund`)
+	// put
+	assertContains(t, code, `reservationModel.UpdateStatus`)
+	// response
+	assertContains(t, code, `"reservation":`)
+	assertContains(t, code, `"refund":`)
+}
+
+func TestGenerateLiteralArg(t *testing.T) {
+	sf := parser.ServiceFunc{
+		Name: "Cancel", FileName: "cancel.go",
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqPut, Model: "Reservation.UpdateStatus", Args: []parser.Arg{{Source: "request", Field: "ID"}, {Literal: "cancelled"}}},
+		},
+	}
+	code := mustGenerate(t, sf, nil)
+	assertContains(t, code, `reservationModel.UpdateStatus(iD, "cancelled")`)
+}
+
+func TestGenerateModelInterface(t *testing.T) {
+	st := &validator.SymbolTable{
+		Models: map[string]validator.ModelSymbol{
+			"Course": {Methods: map[string]validator.MethodInfo{
+				"FindByID": {Cardinality: "one"},
+			}},
+		},
+		DDLTables: map[string]validator.DDLTable{
+			"courses": {Columns: map[string]string{"id": "int64", "title": "string"}},
+		},
+		Operations: map[string]validator.OperationSymbol{},
+	}
+	funcs := []parser.ServiceFunc{{
+		Name: "GetCourse", FileName: "get_course.go",
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqGet, Model: "Course.FindByID", Args: []parser.Arg{{Source: "request", Field: "CourseID"}}, Result: &parser.Result{Type: "Course", Var: "course"}},
+			{Type: parser.SeqResponse, Fields: map[string]string{"course": "course"}},
+		},
+	}}
 
 	outDir := t.TempDir()
-	if err := Generate(funcs, outDir, nil); err != nil {
-		t.Fatalf("Generate 실패: %v", err)
-	}
-
-	// 파일 생성 확인
-	for _, sf := range funcs {
-		path := filepath.Join(outDir, sf.FileName)
-		if _, err := readFile(path); err != nil {
-			t.Errorf("파일 생성 안 됨: %s", path)
-		}
-	}
-}
-
-func TestGenerateModelInterfaces(t *testing.T) {
-	_, file, _, _ := runtime.Caller(0)
-	dummyRoot := filepath.Join(filepath.Dir(file), "..", "specs", "dummy-study")
-
-	funcs, err := parser.ParseDir(filepath.Join(dummyRoot, "service"))
-	if err != nil {
-		t.Fatalf("파싱 실패: %v", err)
-	}
-
-	st, err := validator.LoadSymbolTable(dummyRoot)
-	if err != nil {
-		t.Fatalf("심볼 테이블 로드 실패: %v", err)
-	}
-
-	outDir := filepath.Join(filepath.Dir(file), "..", "testdata", "model_iface_test")
-	os.MkdirAll(outDir, 0755)
-	defer os.RemoveAll(outDir)
-
 	if err := GenerateModelInterfaces(funcs, st, outDir); err != nil {
-		t.Fatalf("모델 인터페이스 생성 실패: %v", err)
+		t.Fatal(err)
 	}
 
-	code, err := os.ReadFile(filepath.Join(outDir, "model", "models_gen.go"))
+	data, err := readFile(t, outDir+"/model/models_gen.go")
 	if err != nil {
-		t.Fatalf("생성된 파일 읽기 실패: %v", err)
+		t.Fatal(err)
 	}
-	got := string(code)
+	assertContains(t, data, "type CourseModel interface")
+	assertContains(t, data, "FindByID(")
+}
 
-	checks := []struct {
-		label string
-		want  string
-	}{
-		{"package", "package model"},
-		{"time import", `import "time"`},
-		{"ReservationModel", "type ReservationModel interface"},
-		{"Create with time", "startAt time.Time, endAt time.Time"},
-		{"FindByID", "FindByID(reservationID int64) (*Reservation, error)"},
-		{"ListByUserID many+pagination", "ListByUserID(userID int64, opts QueryOpts) ([]Reservation, int, error)"},
-		{"UpdateStatus exec", "UpdateStatus(reservationID int64, status string) error"},
-		{"RoomModel", "type RoomModel interface"},
-		{"Room Update", "Update(roomID int64, name string, capacity int64, location string) error"},
-		{"UserModel", "type UserModel interface"},
-		{"FindByEmail", "FindByEmail(email string) (*User, error)"},
-		{"SessionModel", "type SessionModel interface"},
-		// dot notation params (user.ID) → userID in interface
-		{"Session Create with dot param", "Create(userID int64) (*Token, error)"},
-	}
+// --- helpers ---
 
-	// SSaC에서 사용되지 않는 메서드는 포함되면 안 됨
-	negChecks := []struct {
-		label  string
-		reject string
-	}{
-		{"unused ListAll", "ListAll("},
+func mustGenerate(t *testing.T, sf parser.ServiceFunc, st *validator.SymbolTable) string {
+	t.Helper()
+	code, err := GenerateFunc(sf, st)
+	if err != nil {
+		t.Fatalf("GenerateFunc failed: %v", err)
 	}
+	return string(code)
+}
 
-	for _, c := range checks {
-		if !strings.Contains(got, c.want) {
-			t.Errorf("[%s] %q 없음\n--- got ---\n%s", c.label, c.want, got)
-		}
-	}
-	for _, c := range negChecks {
-		if strings.Contains(got, c.reject) {
-			t.Errorf("[%s] %q가 포함되면 안 됨", c.label, c.reject)
-		}
+func assertContains(t *testing.T, code, substr string) {
+	t.Helper()
+	if !strings.Contains(code, substr) {
+		t.Errorf("expected code to contain %q\n--- code ---\n%s", substr, code)
 	}
 }
 
-func TestGenerateQueryOptsAndTotal(t *testing.T) {
-	_, file, _, _ := runtime.Caller(0)
-	dummyRoot := filepath.Join(filepath.Dir(file), "..", "specs", "dummy-study")
-
-	st, err := validator.LoadSymbolTable(dummyRoot)
-	if err != nil {
-		t.Fatalf("심볼 테이블 로드 실패: %v", err)
-	}
-
-	// list_my_reservations.go: ListByUserID has x-pagination → QueryOpts + 3-tuple
-	sf, err := parser.ParseFile(filepath.Join(dummyRoot, "service", "list_my_reservations.go"))
-	if err != nil {
-		t.Fatalf("파싱 실패: %v", err)
-	}
-
-	code, err := GenerateFunc(*sf, st)
-	if err != nil {
-		t.Fatalf("코드 생성 실패: %v", err)
-	}
-	got := string(code)
-
-	checks := []struct {
-		label string
-		want  string
-	}{
-		{"QueryOpts construction", "opts := QueryOpts{}"},
-		{"query limit parsing", `c.Query("limit")`},
-		{"query offset parsing", `c.Query("offset")`},
-		{"opts arg", "reservationModel.ListByUserID(currentUser.UserID, opts)"},
-		{"3-tuple return", "reservations, total, err :="},
-		{"total in response", `"total":        total`},
-		{"strconv import", `"strconv"`},
-		{"currentUser extraction", `c.MustGet("currentUser")`},
-	}
-
-	for _, c := range checks {
-		if !strings.Contains(got, c.want) {
-			t.Errorf("[%s] %q 없음\n--- got ---\n%s", c.label, c.want, got)
-		}
-	}
-
-	// get_reservation.go: FindByID에는 opts가 없어야 함
-	sf2, err := parser.ParseFile(filepath.Join(dummyRoot, "service", "get_reservation.go"))
-	if err != nil {
-		t.Fatalf("파싱 실패: %v", err)
-	}
-	code2, err := GenerateFunc(*sf2, st)
-	if err != nil {
-		t.Fatalf("코드 생성 실패: %v", err)
-	}
-	got2 := string(code2)
-
-	if strings.Contains(got2, "QueryOpts") {
-		t.Errorf("FindByID에 QueryOpts가 포함되면 안 됨\n--- got ---\n%s", got2)
-	}
-}
-
-func TestGenerateTypedRequestParams(t *testing.T) {
-	_, file, _, _ := runtime.Caller(0)
-	dummyRoot := filepath.Join(filepath.Dir(file), "..", "specs", "dummy-study")
-
-	st, err := validator.LoadSymbolTable(dummyRoot)
-	if err != nil {
-		t.Fatalf("심볼 테이블 로드 실패: %v", err)
-	}
-
-	// create_reservation.go: StartAt, EndAt은 time.Time
-	sf, err := parser.ParseFile(filepath.Join(dummyRoot, "service", "create_reservation.go"))
-	if err != nil {
-		t.Fatalf("파싱 실패: %v", err)
-	}
-
-	code, err := GenerateFunc(*sf, st)
-	if err != nil {
-		t.Fatalf("코드 생성 실패: %v", err)
-	}
-	got := string(code)
-
-	// create_reservation: 3개 request param (RoomID, StartAt, EndAt) → JSON body
-	checks := []struct {
-		label string
-		want  string
-	}{
-		{"time import", `"time"`},
-		{"json body struct", "var req struct"},
-		{"StartAt field", "`json:\"StartAt\"`"},
-		{"EndAt field", "`json:\"EndAt\"`"},
-		{"gin bind json", "c.ShouldBindJSON(&req)"},
-		{"startAt var", "startAt := req.StartAt"},
-		{"roomID var", "roomID := req.RoomID"},
-	}
-	for _, c := range checks {
-		if !strings.Contains(got, c.want) {
-			t.Errorf("[%s] %q 없음\n--- got ---\n%s", c.label, c.want, got)
-		}
-	}
-
-	// r.FormValue는 사용되지 않아야 함
-	if strings.Contains(got, "r.FormValue") {
-		t.Errorf("gin 모드에서 r.FormValue가 사용되면 안 됨\n--- got ---\n%s", got)
-	}
-
-	// update_room.go: RoomID는 path param, Name/Capacity/Location은 JSON body
-	sf2, err := parser.ParseFile(filepath.Join(dummyRoot, "service", "update_room.go"))
-	if err != nil {
-		t.Fatalf("파싱 실패: %v", err)
-	}
-
-	code2, err := GenerateFunc(*sf2, st)
-	if err != nil {
-		t.Fatalf("코드 생성 실패: %v", err)
-	}
-	got2 := string(code2)
-
-	checks2 := []struct {
-		label string
-		want  string
-	}{
-		{"func sig gin", "func UpdateRoom(c *gin.Context)"},
-		{"path param extraction", `c.Param("RoomID")`},
-		{"path param parse", "strconv.ParseInt(roomIDStr, 10, 64)"},
-		{"json body struct", "var req struct"},
-		{"Capacity field", "Capacity int64"},
-		{"gin bind json", "c.ShouldBindJSON(&req)"},
-		{"capacity var", "capacity := req.Capacity"},
-	}
-	for _, c := range checks2 {
-		if !strings.Contains(got2, c.want) {
-			t.Errorf("[%s] %q 없음\n--- got ---\n%s", c.label, c.want, got2)
-		}
-	}
-
-	// RoomID는 path param이므로 c.Query/JSON body에 없어야 함
-	if strings.Contains(got2, `c.Query("RoomID")`) {
-		t.Errorf("RoomID는 path param이므로 c.Query가 없어야 함\n--- got ---\n%s", got2)
-	}
-}
-
-func TestGeneratePathParamSignature(t *testing.T) {
-	_, file, _, _ := runtime.Caller(0)
-	dummyRoot := filepath.Join(filepath.Dir(file), "..", "specs", "dummy-study")
-
-	st, err := validator.LoadSymbolTable(dummyRoot)
-	if err != nil {
-		t.Fatalf("심볼 테이블 로드 실패: %v", err)
-	}
-
-	// get_reservation.go: ReservationID는 OpenAPI path param (int64)
-	sf, err := parser.ParseFile(filepath.Join(dummyRoot, "service", "get_reservation.go"))
-	if err != nil {
-		t.Fatalf("파싱 실패: %v", err)
-	}
-
-	code, err := GenerateFunc(*sf, st)
-	if err != nil {
-		t.Fatalf("코드 생성 실패: %v", err)
-	}
-	got := string(code)
-
-	checks := []struct {
-		label string
-		want  string
-	}{
-		{"gin sig", "func GetReservation(c *gin.Context)"},
-		{"path param extraction", `c.Param("ReservationID")`},
-		{"path param parse", "strconv.ParseInt(reservationIDStr, 10, 64)"},
-	}
-
-	negChecks := []struct {
-		label  string
-		reject string
-	}{
-		{"no query for path param", `c.Query("ReservationID")`},
-	}
-
-	for _, c := range checks {
-		if !strings.Contains(got, c.want) {
-			t.Errorf("[%s] %q 없음\n--- got ---\n%s", c.label, c.want, got)
-		}
-	}
-	for _, c := range negChecks {
-		if strings.Contains(got, c.reject) {
-			t.Errorf("[%s] %q가 포함되면 안 됨\n--- got ---\n%s", c.label, c.reject, got)
-		}
-	}
-
-	// login.go: path param 없으므로 gin 시그니처 유지
-	sf2, err := parser.ParseFile(filepath.Join(dummyRoot, "service", "login.go"))
-	if err != nil {
-		t.Fatalf("파싱 실패: %v", err)
-	}
-
-	code2, err := GenerateFunc(*sf2, st)
-	if err != nil {
-		t.Fatalf("코드 생성 실패: %v", err)
-	}
-	got2 := string(code2)
-
-	if !strings.Contains(got2, "func Login(c *gin.Context)") {
-		t.Errorf("Login gin 시그니처 없음\n--- got ---\n%s", got2)
-	}
-}
-
-func TestGenerateCustomMessages(t *testing.T) {
-	// authorize with custom @message → Forbidden 메시지 커스텀
-	sf := parser.ServiceFunc{
-		Name:     "UpdateCourse",
-		FileName: "update_course.go",
-		Sequences: []parser.Sequence{
-			{
-				Type:     parser.SeqAuthorize,
-				Action:   "update",
-				Resource: "course",
-				ID:       "CourseID",
-				Message:  "이 강의를 수정할 권한이 없습니다",
-			},
-			{Type: "response json"},
-		},
-	}
-	code, err := GenerateFunc(sf, nil)
-	if err != nil {
-		t.Fatalf("authorize 코드 생성 실패: %v", err)
-	}
-	got := string(code)
-	if !strings.Contains(got, "이 강의를 수정할 권한이 없습니다") {
-		t.Errorf("authorize 커스텀 메시지 없음\n%s", got)
-	}
-	// 내부 에러는 항상 고정
-	if !strings.Contains(got, "권한 확인 실패") {
-		t.Errorf("authorize 내부 에러 메시지 없음\n%s", got)
-	}
-	// currentUser extraction
-	if !strings.Contains(got, `c.MustGet("currentUser")`) {
-		t.Errorf("currentUser 추출 없음\n%s", got)
-	}
-
-	// call @func with custom @message (guard형: @result 없음)
-	sf2 := parser.ServiceFunc{
-		Name:     "Login",
-		FileName: "login.go",
-		Sequences: []parser.Sequence{
-			{
-				Type:   parser.SeqGet,
-				Model:  "User.FindByEmail",
-				Params: []parser.Param{{Name: "Email", Source: "request"}},
-				Result: &parser.Result{Var: "user", Type: "User"},
-			},
-			{
-				Type:    parser.SeqCall,
-				Package: "auth",
-				Func:    "verifyPassword",
-				Params:  []parser.Param{{Name: "user.PasswordHash"}, {Name: "Password", Source: "request"}},
-				Message: "비밀번호가 틀렸습니다",
-			},
-			{Type: "response json", Vars: []string{"user"}},
-		},
-	}
-	code2, err := GenerateFunc(sf2, nil)
-	if err != nil {
-		t.Fatalf("call func 코드 생성 실패: %v", err)
-	}
-	if !strings.Contains(string(code2), "비밀번호가 틀렸습니다") {
-		t.Errorf("call func 커스텀 메시지 없음\n%s", string(code2))
-	}
-
-	// guard state with custom @message
-	sf3 := parser.ServiceFunc{
-		Name:     "PublishCourse",
-		FileName: "publish_course.go",
-		Sequences: []parser.Sequence{
-			{
-				Type:   parser.SeqGet,
-				Model:  "Course.FindByID",
-				Params: []parser.Param{{Name: "CourseID", Source: "request"}},
-				Result: &parser.Result{Var: "course", Type: "Course"},
-			},
-			{
-				Type:    parser.SeqGuardState,
-				Target:  "course",
-				Params:  []parser.Param{{Name: "course.Published"}},
-				Message: "현재 상태에서 공개할 수 없습니다",
-			},
-			{Type: "response json"},
-		},
-	}
-	code3, err := GenerateFunc(sf3, nil)
-	if err != nil {
-		t.Fatalf("guard state 코드 생성 실패: %v", err)
-	}
-	if !strings.Contains(string(code3), "현재 상태에서 공개할 수 없습니다") {
-		t.Errorf("guard state 커스텀 메시지 없음\n%s", string(code3))
-	}
-}
-
-func TestGenerateGuardState(t *testing.T) {
-	sf := parser.ServiceFunc{
-		Name:     "PublishCourse",
-		FileName: "publish_course.go",
-		Sequences: []parser.Sequence{
-			{
-				Type:   parser.SeqGet,
-				Model:  "Course.FindByID",
-				Params: []parser.Param{{Name: "CourseID", Source: "request"}},
-				Result: &parser.Result{Var: "course", Type: "Course"},
-			},
-			{
-				Type:   parser.SeqGuardNil,
-				Target: "course",
-			},
-			{
-				Type:   parser.SeqGuardState,
-				Target: "course",
-				Params: []parser.Param{{Name: "course.Published"}},
-			},
-			{
-				Type:   parser.SeqPut,
-				Model:  "Course.Publish",
-				Params: []parser.Param{{Name: "CourseID", Source: "request"}},
-			},
-			{
-				Type: "response json",
-			},
-		},
-	}
-
-	code, err := GenerateFunc(sf, nil)
-	if err != nil {
-		t.Fatalf("코드 생성 실패: %v", err)
-	}
-	got := string(code)
-
-	checks := []struct {
-		label string
-		want  string
-	}{
-		{"CanTransition call", `coursestate.CanTransition(course.Published, "PublishCourse")`},
-		{"guard state import", `"states/coursestate"`},
-		{"conflict status", "http.StatusConflict"},
-		{"gin error response", "c.JSON(http.StatusConflict, gin.H{"},
-	}
-
-	for _, c := range checks {
-		if !strings.Contains(got, c.want) {
-			t.Errorf("[%s] %q 없음\n--- got ---\n%s", c.label, c.want, got)
-		}
-	}
-}
-
-func TestGenerateDomain(t *testing.T) {
-	_, file, _, _ := runtime.Caller(0)
-	domainDir := filepath.Join(filepath.Dir(file), "..", "testdata", "domain-service")
-
-	funcs, err := parser.ParseDir(domainDir)
-	if err != nil {
-		t.Fatalf("파싱 실패: %v", err)
-	}
-
-	// Domain 필드 확인
-	var flatFunc, domainFunc *parser.ServiceFunc
-	for i := range funcs {
-		if funcs[i].Domain == "" {
-			flatFunc = &funcs[i]
-		} else if funcs[i].Domain == "course" {
-			domainFunc = &funcs[i]
-		}
-	}
-	if flatFunc == nil || domainFunc == nil {
-		t.Fatal("flat 또는 domain 함수를 찾지 못함")
-	}
-
-	// flat: package service
-	code, err := GenerateFunc(*flatFunc, nil)
-	if err != nil {
-		t.Fatalf("flat 코드 생성 실패: %v", err)
-	}
-	if !strings.Contains(string(code), "package service") {
-		t.Errorf("flat 함수인데 package service가 아님\n%s", string(code))
-	}
-
-	// domain: package course
-	code2, err := GenerateFunc(*domainFunc, nil)
-	if err != nil {
-		t.Fatalf("domain 코드 생성 실패: %v", err)
-	}
-	if !strings.Contains(string(code2), "package course") {
-		t.Errorf("domain=course인데 package course가 아님\n%s", string(code2))
-	}
-
-	// GenerateWith: 도메인별 서브디렉토리에 출력
-	outDir := t.TempDir()
-	if err := Generate(funcs, outDir, nil); err != nil {
-		t.Fatalf("Generate 실패: %v", err)
-	}
-
-	// flat → outDir/login.go
-	if _, err := os.Stat(filepath.Join(outDir, "login.go")); err != nil {
-		t.Errorf("flat 파일이 outDir 루트에 없음: %v", err)
-	}
-
-	// domain → outDir/course/create_course.go
-	if _, err := os.Stat(filepath.Join(outDir, "course", "create_course.go")); err != nil {
-		t.Errorf("domain 파일이 outDir/course/에 없음: %v", err)
-	}
-}
-
-func readFile(path string) (string, error) {
-	b, err := os.ReadFile(path)
-	return string(b), err
+func readFile(t *testing.T, path string) (string, error) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	return string(data), err
 }

@@ -12,3 +12,5 @@ CREATE TABLE reservations (
 
 CREATE INDEX idx_reservations_room_time ON reservations (room_id, start_at, end_at);
 CREATE INDEX idx_reservations_user      ON reservations (user_id);
+CREATE INDEX idx_reservations_start_at ON reservations (start_at);
+CREATE INDEX idx_reservations_created  ON reservations (created_at);

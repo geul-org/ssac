@@ -1,31 +1,18 @@
+//go:build ignore
+
 package service
 
-import "net/http"
+import _ "github.com/geul-org/fullend/pkg/billing"
 
-// @sequence authorize
-// @action cancel
-// @resource reservation
-// @id ReservationID
-
-// @sequence get
-// @model Reservation.FindByID
-// @param ReservationID request
-// @result reservation Reservation
-
-// @sequence guard nil reservation
-// @message "예약을 찾을 수 없습니다"
-
-// @sequence call
-// @func billing.calculateRefund
-// @param reservation
-// @result refund Refund
-
-// @sequence put
-// @model Reservation.UpdateStatus
-// @param ReservationID request
-// @param "cancelled"
-
-// @sequence response json
-// @var reservation
-// @var refund
-func CancelReservation(w http.ResponseWriter, r *http.Request) {}
+// @auth "cancel" "reservation" {id: request.ReservationID} "권한이 없습니다"
+// @get Reservation reservation = Reservation.FindByID(request.ReservationID)
+// @empty reservation "예약을 찾을 수 없습니다"
+// @state reservation {status: reservation.Status} "cancel" "취소할 수 없는 상태입니다"
+// @call Refund refund = billing.CalculateRefund(reservation.ID, reservation.StartAt, reservation.EndAt)
+// @put Reservation.UpdateStatus(request.ReservationID, "cancelled")
+// @get Reservation reservation = Reservation.FindByID(request.ReservationID)
+// @response {
+//   reservation: reservation,
+//   refund: refund
+// }
+func CancelReservation() {}

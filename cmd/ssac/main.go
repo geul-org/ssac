@@ -31,18 +31,77 @@ func main() {
 }
 
 // printValidationResults는 검증 결과를 출력하고, 에러 유무를 반환한다.
-// WARNING은 출력하되 에러로 간주하지 않는다.
 func printValidationResults(errs []validator.ValidationError) bool {
 	hasError := false
 	for _, e := range errs {
-		if e.IsWarning() {
-			fmt.Fprintf(os.Stderr, "%s\n", e)
-		} else {
-			fmt.Fprintf(os.Stderr, "%s\n", e)
+		fmt.Fprintf(os.Stderr, "%s\n", e)
+		if !e.IsWarning() {
 			hasError = true
 		}
 	}
 	return hasError
+}
+
+// resolveServiceDir는 프로젝트 루트와 서비스 디렉토리를 결정한다.
+func resolveServiceDir(dir string) (serviceDir, projectRoot string) {
+	serviceDir = filepath.Join(dir, "service")
+	projectRoot = dir
+	if _, err := os.Stat(serviceDir); os.IsNotExist(err) {
+		serviceDir = dir
+		projectRoot = ""
+	}
+	return
+}
+
+func runParse() {
+	dir := "specs/backend/service"
+	if len(os.Args) > 2 {
+		dir = os.Args[2]
+	}
+
+	serviceDir, _ := resolveServiceDir(dir)
+
+	funcs, err := parser.ParseDir(serviceDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	for _, f := range funcs {
+		if f.Domain != "" {
+			fmt.Printf("=== %s (%s/%s) ===\n", f.Name, f.Domain, f.FileName)
+		} else {
+			fmt.Printf("=== %s (%s) ===\n", f.Name, f.FileName)
+		}
+		for i, s := range f.Sequences {
+			fmt.Printf("  [%d] @%s", i, s.Type)
+			if s.Model != "" {
+				fmt.Printf(" %s", s.Model)
+			}
+			if s.Result != nil {
+				fmt.Printf(" → %s %s", s.Result.Var, s.Result.Type)
+			}
+			if len(s.Args) > 0 {
+				fmt.Printf(" args=%d", len(s.Args))
+			}
+			if s.Target != "" {
+				fmt.Printf(" target=%s", s.Target)
+			}
+			if s.Action != "" {
+				fmt.Printf(" action=%s resource=%s", s.Action, s.Resource)
+			}
+			if s.DiagramID != "" {
+				fmt.Printf(" diagram=%s transition=%s", s.DiagramID, s.Transition)
+			}
+			if len(s.Fields) > 0 {
+				fmt.Printf(" fields=%d", len(s.Fields))
+			}
+			if s.Message != "" {
+				fmt.Printf(" msg=%q", s.Message)
+			}
+			fmt.Println()
+		}
+	}
 }
 
 func runValidate() {
@@ -51,13 +110,7 @@ func runValidate() {
 		dir = os.Args[2]
 	}
 
-	// dir/service/ 가 있으면 프로젝트 루트, 없으면 service 디렉토리 직접 지정
-	serviceDir := filepath.Join(dir, "service")
-	projectRoot := dir
-	if _, err := os.Stat(serviceDir); os.IsNotExist(err) {
-		serviceDir = dir
-		projectRoot = ""
-	}
+	serviceDir, projectRoot := resolveServiceDir(dir)
 
 	funcs, err := parser.ParseDir(serviceDir)
 	if err != nil {
@@ -65,7 +118,6 @@ func runValidate() {
 		os.Exit(1)
 	}
 
-	// 프로젝트 루트가 있고 외부 SSOT가 있으면 심볼 테이블 교차 검증
 	if projectRoot != "" {
 		st, stErr := validator.LoadSymbolTable(projectRoot)
 		if stErr == nil {
@@ -78,7 +130,6 @@ func runValidate() {
 		}
 	}
 
-	// 외부 SSOT 없으면 내부 검증만
 	errs := validator.Validate(funcs)
 	if hasError := printValidationResults(errs); hasError {
 		os.Exit(1)
@@ -94,13 +145,7 @@ func runGen() {
 	inDir := os.Args[2]
 	outDir := os.Args[3]
 
-	// inDir/service/ 가 있으면 프로젝트 루트로 간주
-	serviceDir := filepath.Join(inDir, "service")
-	projectRoot := inDir
-	if _, err := os.Stat(serviceDir); os.IsNotExist(err) {
-		serviceDir = inDir
-		projectRoot = ""
-	}
+	serviceDir, projectRoot := resolveServiceDir(inDir)
 
 	funcs, err := parser.ParseDir(serviceDir)
 	if err != nil {
@@ -108,7 +153,6 @@ func runGen() {
 		os.Exit(1)
 	}
 
-	// validate before generate (외부 SSOT 있으면 교차 검증)
 	var st *validator.SymbolTable
 	var validationErrs []validator.ValidationError
 	if projectRoot != "" {
@@ -131,7 +175,6 @@ func runGen() {
 		os.Exit(1)
 	}
 
-	// Model interface 파생 생성 (심볼 테이블이 있을 때만)
 	if st != nil {
 		if err := generator.GenerateModelInterfaces(funcs, st, outDir); err != nil {
 			fmt.Fprintf(os.Stderr, "model interface generate error: %v\n", err)
@@ -141,34 +184,4 @@ func runGen() {
 	}
 
 	fmt.Printf("generated %d files in %s\n", len(funcs), outDir)
-}
-
-func runParse() {
-	dir := "specs/backend/service"
-	if len(os.Args) > 2 {
-		dir = os.Args[2]
-	}
-
-	funcs, err := parser.ParseDir(dir)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-
-	for _, f := range funcs {
-		fmt.Printf("=== %s (%s) ===\n", f.Name, f.FileName)
-		for i, s := range f.Sequences {
-			fmt.Printf("  [%d] %s", i, s.Type)
-			if s.Model != "" {
-				fmt.Printf(" | model=%s", s.Model)
-			}
-			if s.Result != nil {
-				fmt.Printf(" | result=%s %s", s.Result.Var, s.Result.Type)
-			}
-			if s.Message != "" {
-				fmt.Printf(" | message=%q", s.Message)
-			}
-			fmt.Println()
-		}
-	}
 }

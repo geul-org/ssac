@@ -1,38 +1,12 @@
 package service
 
-import "net/http"
-
-// @sequence authorize
-// @action create
-// @resource reservation
-// @id RoomID
-
-// @sequence get
-// @model Room.FindByID
-// @param RoomID request
-// @result room Room
-
-// @sequence guard nil room
-// @message "스터디룸이 존재하지 않습니다"
-
-// @sequence get
-// @model Reservation.FindConflict
-// @param RoomID request
-// @param StartAt request
-// @param EndAt request
-// @result conflict Reservation
-
-// @sequence guard exists conflict
-// @message "해당 시간에 이미 예약이 있습니다"
-
-// @sequence post
-// @model Reservation.Create
-// @param UserID currentUser
-// @param RoomID request
-// @param StartAt request
-// @param EndAt request
-// @result reservation Reservation
-
-// @sequence response json
-// @var reservation
-func CreateReservation(w http.ResponseWriter, r *http.Request) {}
+// @auth "create" "reservation" {id: request.RoomID} "권한이 없습니다"
+// @get Room room = Room.FindByID(request.RoomID)
+// @empty room "스터디룸이 존재하지 않습니다"
+// @get Reservation conflict = Reservation.FindConflict(request.RoomID, request.StartAt, request.EndAt)
+// @exists conflict "해당 시간에 이미 예약이 있습니다"
+// @post Reservation reservation = Reservation.Create(currentUser.ID, request.RoomID, request.StartAt, request.EndAt)
+// @response {
+//   reservation: reservation
+// }
+func CreateReservation() {}

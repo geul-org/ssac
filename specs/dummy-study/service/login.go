@@ -1,26 +1,14 @@
+//go:build ignore
+
 package service
 
-import "net/http"
+import _ "github.com/geul-org/fullend/pkg/auth"
 
-// @sequence get
-// @model User.FindByEmail
-// @param Email request
-// @result user User
-
-// @sequence guard nil user
-// @message "사용자를 찾을 수 없습니다"
-
-// @sequence call
-// @func auth.verifyPassword
-// @param user.PasswordHash
-// @param Password request
-// @message "비밀번호가 일치하지 않습니다"
-
-// @sequence post
-// @model Session.Create
-// @param user.ID
-// @result token Token
-
-// @sequence response json
-// @var token
-func Login(w http.ResponseWriter, r *http.Request) {}
+// @get User user = User.FindByEmail(request.Email)
+// @empty user "사용자를 찾을 수 없습니다"
+// @call auth.VerifyPassword(user.PasswordHash, request.Password)
+// @post Token token = Session.Create(user.ID)
+// @response {
+//   token: token
+// }
+func Login() {}

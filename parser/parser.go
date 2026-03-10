@@ -11,37 +11,38 @@ import (
 )
 
 // ParseDir은 디렉토리 내 모든 .go 파일을 재귀 탐색하여 []ServiceFunc를 반환한다.
-// 하위 디렉토리의 파일은 Domain 필드에 첫 번째 디렉토리명이 설정된다.
 func ParseDir(dir string) ([]ServiceFunc, error) {
 	var funcs []ServiceFunc
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(d.Name(), ".go") {
 			return err
 		}
-		sf, err := ParseFile(path)
+		sfs, err := ParseFile(path)
 		if err != nil {
 			return fmt.Errorf("%s 파싱 실패: %w", path, err)
 		}
-		if sf != nil {
+		for i := range sfs {
 			rel, _ := filepath.Rel(dir, path)
 			if parts := strings.Split(filepath.Dir(rel), string(filepath.Separator)); parts[0] != "." {
-				sf.Domain = parts[0]
+				sfs[i].Domain = parts[0]
 			}
-			funcs = append(funcs, *sf)
+			funcs = append(funcs, sfs[i])
 		}
 		return nil
 	})
 	return funcs, err
 }
 
-// ParseFile은 단일 .go 파일을 파싱하여 ServiceFunc를 반환한다.
-// sequence 주석이 없으면 nil을 반환한다.
-func ParseFile(path string) (*ServiceFunc, error) {
+// ParseFile은 단일 .go 파일을 파싱하여 []ServiceFunc를 반환한다.
+func ParseFile(path string) ([]ServiceFunc, error) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
 	if err != nil {
 		return nil, fmt.Errorf("Go 파싱 실패: %w", err)
 	}
+
+	imports := collectImports(f)
+	var funcs []ServiceFunc
 
 	for _, decl := range f.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
@@ -49,7 +50,6 @@ func ParseFile(path string) (*ServiceFunc, error) {
 			continue
 		}
 
-		// 함수 앞의 모든 주석 그룹을 수집 (빈 줄로 분리되어도 포함)
 		var comments []*ast.Comment
 		fnPos := fn.Pos()
 		for _, cg := range f.Comments {
@@ -58,31 +58,44 @@ func ParseFile(path string) (*ServiceFunc, error) {
 			}
 		}
 
-		sequences := parseCommentList(comments)
+		sequences := parseComments(comments)
 		if len(sequences) == 0 {
 			continue
 		}
 
-		return &ServiceFunc{
+		funcs = append(funcs, ServiceFunc{
 			Name:      fn.Name.Name,
 			FileName:  filepath.Base(path),
-			Imports:   collectImportsFromAST(f),
+			Imports:   imports,
 			Sequences: sequences,
-		}, nil
+		})
+		// 다음 함수를 위해 comments를 리셋하지 않아도 됨 — cg.End() < fnPos 체크가 함수별로 필터링
 	}
-	return nil, nil
+	return funcs, nil
 }
 
-// parseCommentList는 주석 리스트에서 sequence 블록을 추출한다.
-func parseCommentList(comments []*ast.Comment) []Sequence {
+// parseComments는 주석 리스트에서 v2 시퀀스를 추출한다.
+func parseComments(comments []*ast.Comment) []Sequence {
 	var sequences []Sequence
-	var current *Sequence
+	var responseLines []string
+	inResponse := false
 
-	for _, comment := range comments {
-		line := strings.TrimPrefix(comment.Text, "//")
+	for _, c := range comments {
+		line := strings.TrimPrefix(c.Text, "//")
 		line = strings.TrimSpace(line)
 
-		if line == "" {
+		if inResponse {
+			if line == "}" {
+				inResponse = false
+				seq := Sequence{
+					Type:   SeqResponse,
+					Fields: parseResponseFields(responseLines),
+				}
+				sequences = append(sequences, seq)
+				responseLines = nil
+				continue
+			}
+			responseLines = append(responseLines, line)
 			continue
 		}
 
@@ -90,156 +103,347 @@ func parseCommentList(comments []*ast.Comment) []Sequence {
 			continue
 		}
 
-		tag, value := parseTag(line)
-
-		if tag == "sequence" {
-			if current != nil {
-				sequences = append(sequences, *current)
-			}
-			seqType := parseSequenceType(value)
-			current = &Sequence{Type: seqType}
-			// guard nil/exists/state: 3번째 단어가 대상 변수 또는 stateDiagramID
-			if seqType == SeqGuardNil || seqType == SeqGuardExists || seqType == SeqGuardState {
-				current.Target = parseGuardTarget(value)
-			}
+		seq, isResponseStart := parseLine(line)
+		if isResponseStart {
+			inResponse = true
+			responseLines = nil
 			continue
 		}
-
-		if current == nil {
-			continue
-		}
-
-		switch tag {
-		case "model":
-			current.Model = value
-		case "param":
-			current.Params = append(current.Params, parseParam(value))
-		case "result":
-			current.Result = parseResult(value)
-		case "message":
-			current.Message = trimQuotes(value)
-		case "var":
-			current.Vars = append(current.Vars, value)
-		case "action":
-			current.Action = value
-		case "resource":
-			current.Resource = value
-		case "id":
-			current.ID = value
-		case "func":
-			if dot := strings.Index(value, "."); dot >= 0 {
-				current.Package = value[:dot]
-				current.Func = value[dot+1:]
-			} else {
-				current.Func = value
-			}
+		if seq != nil {
+			sequences = append(sequences, *seq)
 		}
 	}
-
-	if current != nil {
-		sequences = append(sequences, *current)
-	}
-
 	return sequences
 }
 
-// parseTag는 "@tag value" 형식의 라인에서 태그와 값을 분리한다.
-func parseTag(line string) (tag, value string) {
-	line = strings.TrimPrefix(line, "@")
-	parts := strings.SplitN(line, " ", 2)
-	tag = parts[0]
-	if len(parts) > 1 {
-		value = strings.TrimSpace(parts[1])
-	}
-	return
-}
-
-// parseSequenceType은 "guard nil project" 같은 값에서 sequence 타입을 추출한다.
-// "guard nil"과 "guard exists"는 두 단어 타입이며, 뒤의 대상은 Type에 포함하지 않는다.
-// "response json"처럼 서브타입이 있는 경우도 함께 반환한다.
-func parseSequenceType(value string) string {
-	parts := strings.Fields(value)
-	if len(parts) == 0 {
-		return value
-	}
-
-	// guard nil / guard exists: 두 단어 타입
-	if parts[0] == "guard" && len(parts) >= 2 {
-		candidate := parts[0] + " " + parts[1]
-		if ValidSequenceTypes[candidate] {
-			return candidate
+// parseLine은 한 줄을 파싱하여 Sequence를 반환한다.
+// @response { 의 경우 (nil, true)를 반환하여 멀티라인 모드 시작을 알린다.
+func parseLine(line string) (*Sequence, bool) {
+	if strings.HasPrefix(line, "@response") {
+		trimmed := strings.TrimSpace(strings.TrimPrefix(line, "@response"))
+		if trimmed == "{" {
+			return nil, true
 		}
 	}
 
-	// response json 등: 서브타입 포함
-	if parts[0] == "response" && len(parts) >= 2 {
-		return parts[0] + " " + parts[1]
+	if strings.HasPrefix(line, "@get ") {
+		return parseCRUD(SeqGet, line[5:], true), false
+	}
+	if strings.HasPrefix(line, "@post ") {
+		return parseCRUD(SeqPost, line[6:], true), false
+	}
+	if strings.HasPrefix(line, "@put ") {
+		return parseCRUD(SeqPut, line[5:], false), false
+	}
+	if strings.HasPrefix(line, "@delete ") {
+		return parseCRUD(SeqDelete, line[8:], false), false
+	}
+	if strings.HasPrefix(line, "@empty ") {
+		return parseGuard(SeqEmpty, line[7:]), false
+	}
+	if strings.HasPrefix(line, "@exists ") {
+		return parseGuard(SeqExists, line[8:]), false
+	}
+	if strings.HasPrefix(line, "@state ") {
+		return parseState(line[7:]), false
+	}
+	if strings.HasPrefix(line, "@auth ") {
+		return parseAuth(line[6:]), false
+	}
+	if strings.HasPrefix(line, "@call ") {
+		return parseCall(line[6:]), false
 	}
 
-	return parts[0]
+	return nil, false
 }
 
-// parseParam은 "@param Name source [-> column]" 형식을 파싱한다.
-// 따옴표로 감싼 리터럴은 하나의 Name으로 취급한다.
-// "-> column"이 있으면 명시적 DDL 컬럼 매핑으로 사용한다.
-func parseParam(value string) Param {
-	// 따옴표로 시작하면 닫는 따옴표까지가 Name
-	if strings.HasPrefix(value, `"`) {
-		end := strings.Index(value[1:], `"`)
-		if end >= 0 {
-			return Param{Name: value[:end+2]} // 따옴표 포함
+// parseCRUD는 @get/@post/@put/@delete를 파싱한다.
+// hasResult=true: Type var = Model.Method(args)
+// hasResult=false: Model.Method(args)
+func parseCRUD(seqType, rest string, hasResult bool) *Sequence {
+	rest = strings.TrimSpace(rest)
+	seq := &Sequence{Type: seqType}
+
+	if hasResult {
+		// Type var = Model.Method(args)
+		eqIdx := strings.Index(rest, "=")
+		if eqIdx < 0 {
+			return nil
+		}
+		lhs := strings.TrimSpace(rest[:eqIdx])
+		rhs := strings.TrimSpace(rest[eqIdx+1:])
+
+		result := parseResult(lhs)
+		if result == nil {
+			return nil
+		}
+		seq.Result = result
+
+		model, args := parseCallExpr(rhs)
+		seq.Model = model
+		seq.Args = args
+	} else {
+		// Model.Method(args)
+		model, args := parseCallExpr(rest)
+		seq.Model = model
+		seq.Args = args
+	}
+
+	return seq
+}
+
+// parseGuard는 @empty/@exists를 파싱한다.
+// target "message"
+func parseGuard(seqType, rest string) *Sequence {
+	rest = strings.TrimSpace(rest)
+	target, msg := splitTargetMessage(rest)
+	return &Sequence{
+		Type:    seqType,
+		Target:  target,
+		Message: msg,
+	}
+}
+
+// parseState는 @state를 파싱한다.
+// diagramID {inputs} "transition" "message"
+func parseState(rest string) *Sequence {
+	rest = strings.TrimSpace(rest)
+
+	// diagramID
+	spaceIdx := strings.IndexByte(rest, ' ')
+	if spaceIdx < 0 {
+		return nil
+	}
+	diagramID := rest[:spaceIdx]
+	rest = strings.TrimSpace(rest[spaceIdx+1:])
+
+	// {inputs}
+	inputs, rest := extractInputs(rest)
+
+	// "transition" "message"
+	transition, msg := parseTwoQuoted(rest)
+
+	return &Sequence{
+		Type:       SeqState,
+		DiagramID:  diagramID,
+		Inputs:     inputs,
+		Transition: transition,
+		Message:    msg,
+	}
+}
+
+// parseAuth는 @auth를 파싱한다.
+// "action" "resource" {inputs} "message"
+func parseAuth(rest string) *Sequence {
+	rest = strings.TrimSpace(rest)
+
+	// "action"
+	action, rest := extractQuoted(rest)
+	rest = strings.TrimSpace(rest)
+
+	// "resource"
+	resource, rest := extractQuoted(rest)
+	rest = strings.TrimSpace(rest)
+
+	// {inputs}
+	inputs, rest := extractInputs(rest)
+
+	// "message"
+	msg, _ := extractQuoted(strings.TrimSpace(rest))
+
+	return &Sequence{
+		Type:     SeqAuth,
+		Action:   action,
+		Resource: resource,
+		Inputs:   inputs,
+		Message:  msg,
+	}
+}
+
+// parseCall은 @call을 파싱한다.
+// Type var = pkg.Func(args) 또는 pkg.Func(args)
+func parseCall(rest string) *Sequence {
+	rest = strings.TrimSpace(rest)
+	seq := &Sequence{Type: SeqCall}
+
+	// = 가 있고, 그 전에 ( 가 없으면 result 있는 형태
+	eqIdx := strings.Index(rest, "=")
+	parenIdx := strings.Index(rest, "(")
+	if eqIdx > 0 && (parenIdx < 0 || eqIdx < parenIdx) {
+		lhs := strings.TrimSpace(rest[:eqIdx])
+		rhs := strings.TrimSpace(rest[eqIdx+1:])
+
+		result := parseResult(lhs)
+		if result == nil {
+			return nil
+		}
+		seq.Result = result
+
+		model, args := parseCallExpr(rhs)
+		seq.Model = model
+		seq.Args = args
+	} else {
+		model, args := parseCallExpr(rest)
+		seq.Model = model
+		seq.Args = args
+	}
+
+	return seq
+}
+
+// parseResult는 "Type var" 또는 "[]Type var"를 파싱한다.
+func parseResult(lhs string) *Result {
+	lhs = strings.TrimSpace(lhs)
+	parts := strings.Fields(lhs)
+	if len(parts) != 2 {
+		return nil
+	}
+	return &Result{
+		Type: parts[0],
+		Var:  parts[1],
+	}
+}
+
+// parseCallExpr는 "Model.Method(args)" 또는 "pkg.Func(args)"를 파싱한다.
+func parseCallExpr(expr string) (string, []Arg) {
+	expr = strings.TrimSpace(expr)
+	parenIdx := strings.Index(expr, "(")
+	if parenIdx < 0 {
+		return expr, nil
+	}
+	model := expr[:parenIdx]
+	argsStr := expr[parenIdx+1:]
+	argsStr = strings.TrimSuffix(strings.TrimSpace(argsStr), ")")
+	argsStr = strings.TrimSpace(argsStr)
+	if argsStr == "" {
+		return model, nil
+	}
+	return model, parseArgs(argsStr)
+}
+
+// parseArgs는 쉼표 분리 인자를 파싱한다.
+func parseArgs(s string) []Arg {
+	parts := strings.Split(s, ",")
+	var args []Arg
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		args = append(args, parseArg(p))
+	}
+	return args
+}
+
+// parseArg는 단일 인자를 파싱한다.
+func parseArg(s string) Arg {
+	s = strings.TrimSpace(s)
+	// "literal"
+	if strings.HasPrefix(s, `"`) && strings.HasSuffix(s, `"`) {
+		return Arg{Literal: s[1 : len(s)-1]}
+	}
+	// source.Field
+	dotIdx := strings.IndexByte(s, '.')
+	if dotIdx > 0 {
+		return Arg{Source: s[:dotIdx], Field: s[dotIdx+1:]}
+	}
+	// bare variable (shouldn't happen in valid syntax, but handle gracefully)
+	return Arg{Source: s}
+}
+
+// parseResponseFields는 @response 블록 내부 라인을 파싱한다.
+func parseResponseFields(lines []string) map[string]string {
+	fields := make(map[string]string)
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		line = strings.TrimSuffix(line, ",")
+		colonIdx := strings.IndexByte(line, ':')
+		if colonIdx < 0 {
+			continue
+		}
+		key := strings.TrimSpace(line[:colonIdx])
+		val := strings.TrimSpace(line[colonIdx+1:])
+		if key != "" && val != "" {
+			fields[key] = val
 		}
 	}
-
-	// "-> column" 매핑 분리
-	var column string
-	if arrowIdx := strings.Index(value, "->"); arrowIdx >= 0 {
-		column = strings.TrimSpace(value[arrowIdx+2:])
-		value = strings.TrimSpace(value[:arrowIdx])
-	}
-
-	parts := strings.Fields(value)
-	p := Param{Name: parts[0], Column: column}
-	if len(parts) > 1 {
-		p.Source = parts[1]
-	}
-	return p
+	return fields
 }
 
-// parseResult는 "@result var Type" 또는 "@result var Type.Field" 형식을 파싱한다.
-// Type.Field가 있으면 Response struct의 필드명으로 사용한다.
-func parseResult(value string) *Result {
-	parts := strings.Fields(value)
-	if len(parts) < 2 {
-		return &Result{Var: parts[0]}
+// parseInputs는 {key: value, ...} 형식을 파싱한다.
+func parseInputs(s string) map[string]string {
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(s, "{")
+	s = strings.TrimSuffix(s, "}")
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return map[string]string{}
 	}
-	typePart := parts[1]
-	if dot := strings.Index(typePart, "."); dot >= 0 {
-		return &Result{Var: parts[0], Type: typePart[:dot], Field: typePart[dot+1:]}
+	result := make(map[string]string)
+	for _, pair := range strings.Split(s, ",") {
+		pair = strings.TrimSpace(pair)
+		colonIdx := strings.IndexByte(pair, ':')
+		if colonIdx < 0 {
+			continue
+		}
+		key := strings.TrimSpace(pair[:colonIdx])
+		val := strings.TrimSpace(pair[colonIdx+1:])
+		if key != "" && val != "" {
+			result[key] = val
+		}
 	}
-	return &Result{Var: parts[0], Type: typePart}
+	return result
 }
 
-// parseGuardTarget은 "guard nil project"에서 대상 변수 "project"를 추출한다.
-func parseGuardTarget(value string) string {
-	parts := strings.Fields(value)
-	if len(parts) >= 3 {
-		return parts[2]
+// extractInputs는 문자열에서 {…} 블록을 추출하고 나머지를 반환한다.
+func extractInputs(s string) (map[string]string, string) {
+	openIdx := strings.IndexByte(s, '{')
+	if openIdx < 0 {
+		return map[string]string{}, s
 	}
-	return ""
+	closeIdx := strings.IndexByte(s, '}')
+	if closeIdx < 0 {
+		return map[string]string{}, s
+	}
+	inputStr := s[openIdx : closeIdx+1]
+	rest := strings.TrimSpace(s[closeIdx+1:])
+	return parseInputs(inputStr), rest
 }
 
-// trimQuotes는 양쪽 따옴표를 제거한다.
-func trimQuotes(s string) string {
-	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
-		return s[1 : len(s)-1]
+// extractQuoted는 문자열 앞의 "quoted" 값을 추출하고 나머지를 반환한다.
+func extractQuoted(s string) (string, string) {
+	s = strings.TrimSpace(s)
+	if !strings.HasPrefix(s, `"`) {
+		return "", s
 	}
-	return s
+	endIdx := strings.IndexByte(s[1:], '"')
+	if endIdx < 0 {
+		return "", s
+	}
+	return s[1 : endIdx+1], strings.TrimSpace(s[endIdx+2:])
 }
 
-// collectImportsFromAST는 Go AST에서 import 경로를 수집한다.
-// codegen이 자동 추가하는 "net/http"는 제외한다.
-func collectImportsFromAST(f *ast.File) []string {
+// parseTwoQuoted는 "first" "second"를 파싱한다.
+func parseTwoQuoted(s string) (string, string) {
+	s = strings.TrimSpace(s)
+	first, rest := extractQuoted(s)
+	second, _ := extractQuoted(rest)
+	return first, second
+}
+
+// splitTargetMessage는 "target "message""를 분리한다.
+func splitTargetMessage(s string) (string, string) {
+	quoteIdx := strings.IndexByte(s, '"')
+	if quoteIdx < 0 {
+		return strings.TrimSpace(s), ""
+	}
+	target := strings.TrimSpace(s[:quoteIdx])
+	msg, _ := extractQuoted(s[quoteIdx:])
+	return target, msg
+}
+
+// collectImports는 AST에서 import 경로를 수집한다.
+func collectImports(f *ast.File) []string {
 	var imports []string
 	for _, imp := range f.Imports {
 		path := strings.Trim(imp.Path.Value, `"`)

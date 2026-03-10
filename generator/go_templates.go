@@ -4,59 +4,19 @@ import "text/template"
 
 var goTemplates = template.Must(template.New("").Parse(`
 {{- define "currentUser" -}}
-	// currentUser
 	currentUser := c.MustGet("currentUser").(*model.CurrentUser)
 {{end}}
 
-{{- define "authorize" -}}
-	// authorize
-	allowed, err := authz.Check(currentUser, "{{.Action}}", "{{.Resource}}", {{.ID}})
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "권한 확인 실패"})
-		return
-	}
-	if !allowed {
-		c.JSON(http.StatusForbidden, gin.H{"error": "{{.Message}}"})
-		return
-	}
-{{end}}
-
 {{- define "get" -}}
-	// get
-	{{.Result.Var}}, {{if .HasTotal}}total, {{end}}err := {{.ModelVar}}.{{.ModelMethod}}({{.ParamArgs}})
+	{{.Result.Var}}, {{if .HasTotal}}total, {{end}}err := {{.ModelCall}}({{.ArgsCode}})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "{{.Message}}"})
 		return
 	}
 {{end}}
 
-{{- define "guard nil" -}}
-	// guard nil
-	if {{.Target}} {{.ZeroCheck}} {
-		c.JSON(http.StatusNotFound, gin.H{"error": "{{.Message}}"})
-		return
-	}
-{{end}}
-
-{{- define "guard exists" -}}
-	// guard exists
-	if {{.Target}} {{.ExistsCheck}} {
-		c.JSON(http.StatusConflict, gin.H{"error": "{{.Message}}"})
-		return
-	}
-{{end}}
-
-{{- define "guard state" -}}
-	// guard state
-	if !{{.Target}}state.CanTransition({{.Entity}}.{{.StatusField}}, "{{.FuncName}}") {
-		c.JSON(http.StatusConflict, gin.H{"error": "{{.Message}}"})
-		return
-	}
-{{end}}
-
 {{- define "post" -}}
-	// post
-	{{.Result.Var}}, err := {{.ModelVar}}.{{.ModelMethod}}({{.ParamArgs}})
+	{{.Result.Var}}, err := {{.ModelCall}}({{.ArgsCode}})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "{{.Message}}"})
 		return
@@ -64,8 +24,7 @@ var goTemplates = template.Must(template.New("").Parse(`
 {{end}}
 
 {{- define "put" -}}
-	// put
-	err {{if .FirstErr}}:={{else}}={{end}} {{.ModelVar}}.{{.ModelMethod}}({{.ParamArgs}})
+	err {{if .FirstErr}}:={{else}}={{end}} {{.ModelCall}}({{.ArgsCode}})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "{{.Message}}"})
 		return
@@ -73,31 +32,60 @@ var goTemplates = template.Must(template.New("").Parse(`
 {{end}}
 
 {{- define "delete" -}}
-	// delete
-	err {{if .FirstErr}}:={{else}}={{end}} {{.ModelVar}}.{{.ModelMethod}}({{.ParamArgs}})
+	err {{if .FirstErr}}:={{else}}={{end}} {{.ModelCall}}({{.ArgsCode}})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "{{.Message}}"})
 		return
 	}
 {{end}}
 
-{{- define "call_func" -}}
-	// call func
-	{{if .Result}}out{{else}}_{{end}}, err {{if .FirstErr}}:={{else}}={{end}} {{.PkgName}}.{{.FuncMethod}}({{.PkgName}}.{{.FuncMethod}}Request{ {{.InputFields}} })
-	if err != nil {
-		c.JSON({{.FuncErrStatus}}, gin.H{"error": "{{.Message}}"})
+{{- define "empty" -}}
+	if {{.Target}} {{.ZeroCheck}} {
+		c.JSON(http.StatusNotFound, gin.H{"error": "{{.Message}}"})
 		return
 	}
-{{- if .Result}}
-	{{.Result.Var}} := out.{{.ResultField}}
-{{- end}}
 {{end}}
 
-{{- define "response json" -}}
-	// response json
+{{- define "exists" -}}
+	if {{.Target}} {{.ExistsCheck}} {
+		c.JSON(http.StatusConflict, gin.H{"error": "{{.Message}}"})
+		return
+	}
+{{end}}
+
+{{- define "state" -}}
+	if !{{.DiagramID}}state.CanTransition({{.DiagramID}}state.Input{ {{.InputFields}} }, "{{.Transition}}") {
+		c.JSON(http.StatusConflict, gin.H{"error": "{{.Message}}"})
+		return
+	}
+{{end}}
+
+{{- define "auth" -}}
+	if err := authz.Check(currentUser, "{{.Action}}", "{{.Resource}}", authz.Input{ {{.InputFields}} }); err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "{{.Message}}"})
+		return
+	}
+{{end}}
+
+{{- define "call_with_result" -}}
+	{{.Result.Var}}, err := {{.PkgName}}.{{.FuncMethod}}({{.PkgName}}.{{.FuncMethod}}Request{ {{.InputFields}} })
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "{{.Message}}"})
+		return
+	}
+{{end}}
+
+{{- define "call_no_result" -}}
+	if err {{if .FirstErr}}:={{else}}={{end}} {{.PkgName}}.{{.FuncMethod}}({{.PkgName}}.{{.FuncMethod}}Request{ {{.InputFields}} }); err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "{{.Message}}"})
+		return
+	}
+{{end}}
+
+{{- define "response" -}}
 	c.JSON(http.StatusOK, gin.H{
-		{{- range .Vars}}
-		"{{.}}": {{.}},
+		{{- range $key, $val := .ResponseFields}}
+		"{{$key}}": {{$val}},
 		{{- end}}
 		{{- if .HasTotal}}
 		"total": total,

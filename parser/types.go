@@ -1,69 +1,81 @@
 package parser
 
-// ServiceFunc는 파일 단위 파싱 결과다.
+// ServiceFunc는 하나의 서비스 함수 선언이다.
 type ServiceFunc struct {
-	Name      string     // 함수명 (e.g. "CreateSession")
-	FileName  string     // 원본 파일명 (e.g. "create_session.go")
-	Domain    string     // 도메인 폴더명 (e.g. "auth"). 빈 문자열이면 루트.
-	Imports   []string   // spec 파일의 import 경로 ("net/http" 제외)
-	Sequences []Sequence // 순서 보존된 sequence 리스트
+	Name      string     // 함수명 (e.g. "GetCourse")
+	FileName  string     // 원본 파일명
+	Domain    string     // 도메인 폴더명 (e.g. "auth", 없으면 "")
+	Sequences []Sequence // 시퀀스 목록
+	Imports   []string   // Go import 경로
 }
 
-// Sequence는 개별 sequence 블록이다.
+// Sequence는 하나의 시퀀스 라인이다.
 type Sequence struct {
-	Type    string   // authorize, get, guard nil, guard exists, guard state, post, put, delete, call, response
-	Model   string   // @model 값 (e.g. "Project.FindByID")
-	Params  []Param  // @param 리스트
-	Result  *Result  // @result (없을 수 있음)
-	Message string   // @message (없으면 빈 문자열)
-	Target  string   // guard 대상 변수 (e.g. "project")
-	Vars    []string // @var 리스트 (response용)
-	// authorize 전용
-	Action   string // @action
-	Resource string // @resource
-	ID       string // @id
-	// call 전용
-	Func    string // @func (funcName only, e.g. "hashPassword")
-	Package string // @func package (e.g. "auth")
+	Type string // "get", "post", "put", "delete", "empty", "exists", "state", "auth", "call", "response"
+
+	// get/post/put/delete/call 공통: 함수 호출
+	Model string // "Course.FindByID" 또는 "auth.VerifyPassword"
+	Args  []Arg  // 호출 인자
+
+	// get/post/call: 대입
+	Result *Result // 결과 바인딩 (nil이면 대입 없음)
+
+	// empty/exists: guard
+	Target string // "course" 또는 "course.InstructorID"
+
+	// state: 상태 전이
+	DiagramID  string            // "reservation"
+	Inputs     map[string]string // {status: "reservation.Status"}
+	Transition string            // "cancel"
+
+	// auth: 권한 검사
+	Action   string // "delete"
+	Resource string // "project"
+	// Inputs 재사용     // {id: "project.ID", owner: "project.OwnerID"}
+
+	// response: 필드 매핑
+	Fields map[string]string // {course: "course", instructor_name: "instructor.Name"}
+
+	// 공통
+	Message string // 에러 메시지
 }
 
-// Param은 @param 태그의 파싱 결과다.
-type Param struct {
-	Name   string // 파라미터명 (e.g. "ProjectID")
-	Source string // 소스 (e.g. "request", 변수명, 리터럴)
-	Column string // 명시적 DDL 컬럼 매핑 (e.g. "method"), 비어있으면 자동 추론
+// Arg는 함수 호출 인자다.
+type Arg struct {
+	Source  string // "request", 변수명, 또는 "" (리터럴)
+	Field   string // "CourseID", "ID" 등
+	Literal string // "cancelled" 등 (Source가 ""일 때)
 }
 
-// Result는 @result 태그의 파싱 결과다.
+// Result는 결과 바인딩이다.
 type Result struct {
-	Var   string // 변수명 (e.g. "project")
-	Type  string // 타입명 (e.g. "Project")
-	Field string // Response struct 필드명 (e.g. "AccessToken"). 비어있으면 ucFirst(Var) 사용.
+	Type string // "Course", "[]Reservation"
+	Var  string // "course", "reservations"
 }
 
 // sequence 타입 상수
 const (
-	SeqAuthorize   = "authorize"
-	SeqGet         = "get"
-	SeqGuardNil    = "guard nil"
-	SeqGuardExists = "guard exists"
-	SeqPost        = "post"
-	SeqPut         = "put"
-	SeqDelete      = "delete"
-	SeqCall        = "call"
-	SeqGuardState  = "guard state"
-	SeqResponse    = "response"
+	SeqGet      = "get"
+	SeqPost     = "post"
+	SeqPut      = "put"
+	SeqDelete   = "delete"
+	SeqEmpty    = "empty"
+	SeqExists   = "exists"
+	SeqState    = "state"
+	SeqAuth     = "auth"
+	SeqCall     = "call"
+	SeqResponse = "response"
 )
 
 var ValidSequenceTypes = map[string]bool{
-	SeqAuthorize:   true,
-	SeqGet:         true,
-	SeqGuardNil:    true,
-	SeqGuardExists: true,
-	SeqPost:        true,
-	SeqPut:         true,
-	SeqDelete:      true,
-	SeqCall:        true,
-	SeqGuardState:  true,
-	SeqResponse:    true,
+	SeqGet:      true,
+	SeqPost:     true,
+	SeqPut:      true,
+	SeqDelete:   true,
+	SeqEmpty:    true,
+	SeqExists:   true,
+	SeqState:    true,
+	SeqAuth:     true,
+	SeqCall:     true,
+	SeqResponse: true,
 }

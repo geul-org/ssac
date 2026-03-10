@@ -1,7 +1,7 @@
 package model
 
 // @dto
-// Token은 로그인 세션 토큰이다.
+// Token은 로그인 세션 토큰이다 (DDL 테이블 없음).
 type Token struct {
 	AccessToken string
 	ExpiresAt   string

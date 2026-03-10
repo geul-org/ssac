@@ -4,7 +4,7 @@
 ~/.clari/repos/ssac
 
 ## 프로젝트 개요
-Service Sequences as Code — Go 주석 기반 선언적 서비스 로직을 파싱하여 Go 구현 코드를 생성하는 CLI 도구.
+Service Sequences as Code — Go 주석 기반 선언적 서비스 로직을 파싱하여 Go+gin 구현 코드를 생성하는 CLI 도구.
 
 ## CLI
 
@@ -32,43 +32,57 @@ ssac gen <service-dir> <out>  # validate → codegen → gofmt (심볼 테이블
 - Go 1.24+, module: `github.com/geul-org/ssac`
 - 파싱: `go/ast`, `go/parser`
 - 코드젠: `text/template`, `go/format`
+- 생성 코드 타겟: `github.com/gin-gonic/gin`
 - 외부 의존성: `gopkg.in/yaml.v3` (OpenAPI 파싱)
 
-## DSL 문법
+## DSL 문법 (v2 — 한 줄 표현식)
 
 ```go
-// @sequence <type>        — 블록 시작. 10종: authorize|get|guard nil|guard exists|guard state|post|put|delete|call|response
-// @model <Model.Method>   — 리소스 모델.메서드 (get/post/put/delete)
-// @param <Name> <source>  — source: request, currentUser, 변수명, "리터럴"
-// @result <var> <Type>    — 결과 바인딩 (get/post 필수, call 선택)
-// @message "msg"          — 커스텀 에러 메시지 (선택, 기본값 자동생성)
-// @var <name>             — response에서 반환할 변수
-// @action @resource @id   — authorize 전용 (3개 모두 필수)
-// @component | @func      — call 전용 (택일 필수). @func는 package.funcName 형식 필수
+// @get Type var = Model.Method(args...)          — 리소스 조회 (result 필수)
+// @post Type var = Model.Method(args...)         — 리소스 생성 (result 필수)
+// @put Model.Method(args...)                     — 리소스 수정 (result 없음)
+// @delete Model.Method(args...)                  — 리소스 삭제 (result 없음)
+// @empty target "message"                        — nil이면 종료 (404)
+// @exists target "message"                       — 존재하면 종료 (409)
+// @state diagramID {inputs} "transition" "msg"   — 상태 전이 검사 (409)
+// @auth "action" "resource" {inputs} "message"   — 권한 검사 (403)
+// @call Type var = pkg.Func(args...)             — 외부 함수 호출 (result 있음/없음)
+// @response { field: var, field: var.Member }    — 응답 (멀티라인 블록)
 ```
 
-타입별 필수 태그:
+Args 형식: `source.Field` 또는 `"literal"`
+- `request.CourseID` — HTTP 요청 파라미터
+- `course.InstructorID` — 이전 결과 변수의 필드
+- `currentUser.ID` — 인증 컨텍스트
+- `"cancelled"` — 문자열 리터럴
+
+타입별 필수 요소:
 
 | 타입 | 필수 |
 |---|---|
-| authorize | @action, @resource, @id |
-| get, post | @model, @result |
-| put, delete | @model |
-| guard nil/exists | target (sequence 라인에 변수명) |
-| guard state | target (stateDiagramID), @param 1개 (entity.Field) |
-| call | @component 또는 @func package.funcName (택일) |
-| response | (없음, @var는 선택) |
+| get, post | Model, Result, Args |
+| put, delete | Model, Args |
+| empty, exists | Target, Message |
+| state | DiagramID, Inputs, Transition, Message |
+| auth | Action, Resource, Message |
+| call | Model (pkg.Func 형식) |
+| response | (없음, Fields 선택) |
 
 ## 디렉토리
 
 ```
 cmd/ssac/main.go                 # CLI 진입점
 parser/                          # 주석 → []ServiceFunc
+  types.go                       #   IR 구조체 (ServiceFunc, Sequence, Arg, Result)
+  parser.go                      #   한 줄 표현식 파서
 validator/                       # 내부 + 외부 SSOT 검증
+  validator.go                   #   검증 규칙
+  symbol.go                      #   심볼 테이블 (DDL, OpenAPI, sqlc, model)
+  errors.go                      #   ValidationError
 generator/                       # Target 인터페이스 기반 코드젠 (다중 언어 확장 가능)
   target.go                      #   Target 인터페이스 + DefaultTarget()
-  go_target.go                   #   GoTarget: Go 코드 생성 구현
-  go_templates.go                #   Go 템플릿
+  go_target.go                   #   GoTarget: Go+gin 코드 생성 구현
+  go_templates.go                #   Go+gin 템플릿
   generator.go                   #   하위 호환 래퍼 (Generate, GenerateWith) + 유틸
 specs/                           # 선언 (입력, SSOT)
   dummy-study/                   #   스터디룸 예약 더미 프로젝트
@@ -78,6 +92,7 @@ artifacts/                       # 문서
   manual-for-human.md            #   상세 매뉴얼 (인간용)
   manual-for-ai.md               #   컴팩트 레퍼런스 (AI용)
 testdata/                        # 테스트 fixture
+v1/                              # 아카이브된 v1 코드 (참조용, 삭제 금지)
 files/                           # 기초 자료
   SSaC.md                        #   기획서
 ```
@@ -86,27 +101,32 @@ files/                           # 기초 자료
 
 `ssac validate <project-root>` 시 자동 감지:
 - `<root>/service/**/*.go` — sequence spec (재귀 탐색, 도메인 폴더 지원)
-- `<root>/db/*.sql` — DDL (CREATE TABLE → 컬럼 타입)
+- `<root>/db/*.sql` — DDL (CREATE TABLE → 컬럼 타입, FK, Index)
 - `<root>/db/queries/*.sql` — sqlc 쿼리 (파일명→모델, `-- name: Method :cardinality`)
 - `<root>/api/openapi.yaml` — OpenAPI 3.0 (operationId=함수명, x-pagination/sort/filter/include)
-- `<root>/model/*.go` — Go interface→component. @func는 외부 패키지이므로 교차검증 스킵
+- `<root>/model/*.go` — Go interface→model, `// @dto`→DDL 없는 DTO. @call은 외부 패키지이므로 교차검증 스킵
 
 ## 코드젠 기능
 
+생성 코드는 gin 프레임워크 사용:
+- 함수 시그니처: `func Name(c *gin.Context)`
+- Path params: `c.Param()` + 타입 변환
+- Request body: `c.ShouldBindJSON(&req)` (2+ request 파라미터) 또는 `c.Query()`
+- currentUser: `c.MustGet("currentUser").(*model.CurrentUser)` — @auth 또는 args에서 currentUser 참조 시 자동 생성
+
 심볼 테이블(외부 SSOT)이 있을 때 추가되는 기능:
 
-- **타입 변환 코드젠**: DDL 컬럼 타입 기반으로 request 파라미터 변환 코드 생성 (int64→`strconv.ParseInt`, time.Time→`time.Parse`, 실패 시 400 early return)
-- **Guard 값 타입**: result 타입에 따른 zero value 비교 (int→`== 0`/`> 0`, string→`== ""`/`!= ""`, pointer→`== nil`/`!= nil`)
-- **currentUser/config source**: `@param Name currentUser` → `currentUser.Name`
+- **타입 변환 코드젠**: DDL 컬럼 타입 기반 request 파라미터 변환 (int64→`strconv.ParseInt`, time.Time→`time.Parse`, 400 early return)
+- **Guard 값 타입**: result 타입에 따른 zero value 비교 (int→`== 0`/`> 0`, pointer→`== nil`/`!= nil`)
 - **Stale 데이터 경고**: put/delete 후 갱신 없이 response에 사용하면 WARNING
 - **QueryOpts 자동 전달**: x-확장 있으면 `opts := QueryOpts{}` 생성 + 모델 호출에 `opts` 인자 자동 추가
 - **List 3-tuple 반환**: many + QueryOpts → `result, total, err :=` (count 포함)
-- **모델 인터페이스 파생**: 3 SSOT 교차(sqlc 카디널리티 + SSaC 파라미터 + OpenAPI x-확장) → `<outDir>/model/models_gen.go`
-  - 모든 @param 소스 포함: request, currentUser, dot notation(`user.ID` → `userID`), 리터럴(`"pending"` → DDL 역매핑)
+- **모델 인터페이스 파생**: 3 SSOT 교차(sqlc 카디널리티 + SSaC Args + OpenAPI x-확장) → `<outDir>/model/models_gen.go`
 - **도메인 폴더 구조**: `service/auth/login.go` → `Domain="auth"` → `outDir/auth/login.go`, `package auth`
-  - flat 구조(`service/login.go`) 하위 호환 유지 (Domain="")
-- **@func 패키지 코드젠**: `@func auth.verifyPassword` → `auth.VerifyPassword(auth.VerifyPasswordInput{...})` 호출 코드 생성
-  - `@result` 없으면 guard형 (401), 있으면 value형 (500)
+- **@call 코드젠**: `@call pkg.Func(args)` → `pkg.Func(pkg.FuncRequest{...})`. result 없음→guard형(401), 있음→value형(500)
+- **@state 코드젠**: `{id}state.CanTransition({id}state.Input{...}, "transition")`, import `"states/{id}state"`
+- **@auth 코드젠**: `authz.Check(currentUser, "action", "resource", authz.Input{...})`
+- **Spec 파일 imports**: spec 파일의 Go import 선언이 생성 코드에 전달됨
 
 ## 더미 프로젝트
 

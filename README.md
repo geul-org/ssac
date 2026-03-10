@@ -18,35 +18,33 @@ Every service function is a sequence of steps. Each step follows a binary contra
 No LLM, no inference — pure symbolic codegen from templates. The spec is the source of truth.
 
 ```go
-// @sequence get
-// @model Project.FindByID
-// @param ProjectID request
-// @result project Project
-
-// @sequence guard nil project
-// @message "project not found"
-
-// @sequence post
-// @model Session.Create
-// @param ProjectID request
-// @param Command request
-// @result session Session
-
-// @sequence response json
-// @var session
-func CreateSession(c *gin.Context) {}
+// @get Project project = Project.FindByID(request.ProjectID)
+// @empty project "project not found"
+// @post Session session = Session.Create(request.ProjectID, request.Command)
+// @response {
+//   session: session
+// }
+func CreateSession() {}
 ```
 
-This 10-line declaration generates the following code (gin framework):
+This 5-line declaration generates the following code (gin framework):
 
 ```go
 func CreateSession(c *gin.Context) {
-    projectID := c.Query("ProjectID")
-    command := c.Query("Command")
+    var req struct {
+        ProjectID int64  `json:"ProjectID"`
+        Command   string `json:"Command"`
+    }
+    if err := c.ShouldBindJSON(&req); err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+        return
+    }
+    projectID := req.ProjectID
+    command := req.Command
 
     project, err := projectModel.FindByID(projectID)
     if err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "Project lookup failed"})
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "Project 조회 실패"})
         return
     }
 
@@ -57,7 +55,7 @@ func CreateSession(c *gin.Context) {
 
     session, err := sessionModel.Create(projectID, command)
     if err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "Session creation failed"})
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "Session 생성 실패"})
         return
     }
 
@@ -69,18 +67,20 @@ func CreateSession(c *gin.Context) {
 
 ## Sequence Types (10)
 
-| Type | Role |
-|---|---|
-| `authorize` | Permission check (OPA, etc.) |
-| `get` | Resource lookup |
-| `guard nil` | Exit if null |
-| `guard exists` | Exit if exists |
-| `guard state` | State transition check |
-| `post` | Resource creation |
-| `put` | Resource update |
-| `delete` | Resource deletion |
-| `call` | External function call (@func package.funcName) |
-| `response` | Return response (json) |
+| Type | Syntax | Role |
+|---|---|---|
+| `get` | `@get Type var = Model.Method(args)` | Resource lookup (result required) |
+| `post` | `@post Type var = Model.Method(args)` | Resource creation (result required) |
+| `put` | `@put Model.Method(args)` | Resource update |
+| `delete` | `@delete Model.Method(args)` | Resource deletion |
+| `empty` | `@empty target "message"` | Exit if nil/zero (404) |
+| `exists` | `@exists target "message"` | Exit if exists (409) |
+| `state` | `@state id {inputs} "transition" "msg"` | State transition check (409) |
+| `auth` | `@auth "action" "resource" {inputs} "msg"` | Permission check (403) |
+| `call` | `@call [Type var =] pkg.Func(args)` | External function call |
+| `response` | `@response { field: var }` | Return response (multi-line block) |
+
+Args format: `source.Field` (e.g. `request.CourseID`, `course.InstructorID`, `currentUser.ID`) or `"literal"`.
 
 ## Install & Run
 
@@ -95,14 +95,13 @@ ssac gen <service-dir> <out>  # validate → codegen → gofmt
 ## Validation
 
 Internal validation (always):
-- Missing required tags per type
-- `@model` format (`Model.Method`)
+- Missing required elements per type
+- Model format (`Model.Method`)
 - Variable flow (reference before declaration)
 
 External SSOT cross-validation (when project structure detected):
 - Model/method existence (sqlc queries, Go interface)
-- Request/response field existence (OpenAPI)
-- `@func` target existence (Go func declarations in model/*.go)
+- Request/response field matching (OpenAPI, forward + reverse)
 - Stale data warning: put/delete followed by response without re-fetch (WARNING level)
 
 ```bash
@@ -112,31 +111,31 @@ ssac validate specs/backend/service  # Internal validation only
 
 ## Code Generation Features
 
+Generated code uses **gin** framework (`func Name(c *gin.Context)`):
+- Path params: `c.Param()` + type conversion
+- Request body: `c.ShouldBindJSON(&req)` or `c.Query()`
+- currentUser: `c.MustGet("currentUser").(*model.CurrentUser)` — auto-generated when needed
+- Error responses: `c.JSON(status, gin.H{"error": "msg"})` with early return
+- Success responses: `c.JSON(http.StatusOK, gin.H{...})` with field mapping from `@response`
+
 When external SSOT (symbol table) is available, `ssac gen` adds:
-- **Type conversion**: DDL column types → `strconv.ParseInt`, `time.Parse` with 400 Bad Request early return
-- **`-> column` mapping**: `@param PaymentMethod request -> method` — explicit DDL column mapping
+- **Type conversion**: DDL column types → `strconv.ParseInt`, `time.Parse` with 400 early return
 - **Guard value types**: Type-aware zero checks (`int` → `== 0`/`> 0`, pointer → `== nil`/`!= nil`)
-- **Source resolution**: `@param Name currentUser` → `currentUser.Name`
-- **`@dto` tag**: `// @dto` on struct types without DDL tables — skips DDL table matching in cross-validation
-- **DDL FK/Index parsing**: REFERENCES (inline/constraint), CREATE INDEX → available for cross-validation
-- **QueryOpts auto-pass**: x-extensions present → `opts := QueryOpts{}` + `opts` arg appended to model call
+- **QueryOpts auto-pass**: x-extensions → `opts := QueryOpts{}` + `opts` arg appended to model call
 - **List 3-tuple return**: `:many` + QueryOpts → `result, total, err :=` (includes count)
 - **Model interface derivation**: Crosses 3 SSOT sources → `<outDir>/model/models_gen.go`
   - sqlc: method names + cardinality (`:one`→`*T`, `:many`→`[]T`, `:exec`→`error`)
-  - SSaC: all @param sources included (request, currentUser, dot notation `user.ID`→`userID`, literal `"pending"`→DDL reverse-mapping)
-  - OpenAPI x-extensions → `opts QueryOpts` parameter added to model methods
+  - SSaC: all args included (request, currentUser, variable refs, literals→DDL reverse-mapping)
+  - OpenAPI x-extensions → `opts QueryOpts` parameter added
 - **Domain folder structure**: `service/auth/login.go` → outputs to `outDir/auth/login.go` with `package auth`
-  - Flat structure (`service/login.go`) backward compatible (Domain="")
-- **@func codegen**: `@func auth.verifyPassword` → `auth.VerifyPassword(auth.VerifyPasswordRequest{...})`
-  - `@result` absent → guard-style (401 Unauthorized), `@result` present → value-style (500 InternalServerError)
-  - `@result var Type.Field` → explicit field extraction (`out.Field`)
-  - `@param user.ID -> UserID` → Request struct field mapping
-- **Spec file imports**: Go import declarations in spec files are passed to generated code. `@func` package name is the alias of the imported package.
-- **`-> column` mapping**: Also used for @func Request struct field mapping: `@param user.ID -> UserID`
+- **@call codegen**: `pkg.Func(pkg.FuncRequest{...})`. No result → guard-style (401), with result → value-style (500)
+- **@state codegen**: `{id}state.CanTransition({id}state.Input{...}, "transition")`
+- **@auth codegen**: `authz.Check(currentUser, "action", "resource", authz.Input{...})`
+- **Spec file imports**: Go import declarations in spec files are passed to generated code
 
 ## OpenAPI x- Extensions
 
-Infrastructure parameters (pagination, sorting, filtering, relation includes) are declared in OpenAPI `x-` extensions, not in SSaC specs. SSaC only declares business parameters. The codegen reads `x-` and automatically constructs `QueryOpts`.
+Infrastructure parameters (pagination, sorting, filtering, relation includes) are declared in OpenAPI `x-` extensions, not in SSaC specs. SSaC only declares business parameters.
 
 ```yaml
 /api/reservations:
@@ -156,21 +155,16 @@ Infrastructure parameters (pagination, sorting, filtering, relation includes) ar
       allowed: [room_id:rooms.id, user_id:users.id]
 ```
 
-Effects on codegen:
-- Methods with x- get `opts QueryOpts` parameter in model interface
-- `:many` + x-pagination → return type includes total: `([]T, int, error)`
-- `QueryOpts` struct auto-generated in `models_gen.go`
-
 ## Project Structure
 
 ```
 cmd/ssac/                        # CLI entrypoint
-parser/                          # Comments → []ServiceFunc
+parser/                          # Comments → []ServiceFunc (one-line expression parser)
 validator/                       # Internal + external SSOT validation
-generator/                       # Target interface → multi-language codegen (Go default)
+generator/                       # Target interface → multi-language codegen (Go+gin default)
   target.go                      #   Target interface + DefaultTarget()
-  go_target.go                   #   GoTarget: Go code generation
-  go_templates.go                #   Go templates
+  go_target.go                   #   GoTarget: Go+gin code generation
+  go_templates.go                #   Go+gin templates
   generator.go                   #   Backward-compatible wrappers + utils
 specs/                           # Declarations (SSOT)
   dummy-study/                   #   Study room reservation demo project
@@ -180,6 +174,7 @@ artifacts/                       # Documentation
   manual-for-human.md            #   Detailed manual
   manual-for-ai.md               #   Compact AI reference
 testdata/                        # Test fixtures
+v1/                              # Archived v1 code (reference only, do not delete)
 files/                           # Design documents
 ```
 
@@ -188,19 +183,19 @@ files/                           # Design documents
 ```
 <project>/
   service/**/*.go         # Sequence specs (recursive, domain folders supported)
-  db/*.sql                # DDL (CREATE TABLE → column types)
+  db/*.sql                # DDL (CREATE TABLE → column types, FK, indexes)
   db/queries/*.sql        # sqlc queries (-- name: Method :cardinality)
-  api/openapi.yaml        # OpenAPI 3.0 (operationId = function name, x-pagination/sort/filter/include)
-  model/*.go              # Go interface → model methods, func → @func targets, // @dto → DTO
+  api/openapi.yaml        # OpenAPI 3.0 (operationId = function name, x-extensions)
+  model/*.go              # Go interface → model methods, // @dto → DTO without DDL table
 ```
 
 ## Tests
 
 ```bash
-go test ./parser/... ./validator/... ./generator/... -v
+go test ./parser/... ./validator/... ./generator/... -count=1
 ```
 
-59 tests: parser 16 + generator 11 + validator 32
+63 tests: parser 21 + validator 24 + generator 18
 
 ## License
 

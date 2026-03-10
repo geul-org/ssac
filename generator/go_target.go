@@ -20,41 +20,20 @@ type GoTarget struct{}
 func (g *GoTarget) FileExtension() string { return ".go" }
 
 // GenerateFunc는 단일 ServiceFunc의 Go 코드를 생성한다.
-// st가 non-nil이면 DDL 타입 기반 변환 코드를 생성한다.
 func (g *GoTarget) GenerateFunc(sf parser.ServiceFunc, st *validator.SymbolTable) ([]byte, error) {
 	var buf bytes.Buffer
 
-	// path parameter 결정
-	var pathParams []validator.PathParam
-	if st != nil {
-		if op, ok := st.Operations[sf.Name]; ok {
-			pathParams = op.PathParams
-		}
-	}
+	// 분석
+	pathParams := getPathParams(sf.Name, st)
 	pathParamSet := map[string]bool{}
 	for _, pp := range pathParams {
 		pathParamSet[pp.Name] = true
 	}
 
-	// request 파라미터 타입 결정 (path param은 제외)
-	typedParams := collectTypedRequestParams(sf.Sequences, st, pathParamSet)
-	hasNonStringPathParam := false
-	for _, pp := range pathParams {
-		if pp.GoType != "string" {
-			hasNonStringPathParam = true
-			break
-		}
-	}
-	needsQueryOpts := false
-	if st != nil && hasAnyQueryOpts(st) {
-		for _, seq := range sf.Sequences {
-			if seq.Type == parser.SeqGet && isListMethod(seq.Model) {
-				needsQueryOpts = true
-				break
-			}
-		}
-	}
-	imports := collectImports(sf.Sequences, typedParams, sf.Imports, hasNonStringPathParam, needsQueryOpts)
+	requestParams := collectRequestParams(sf.Sequences, st, pathParamSet)
+	needsCU := needsCurrentUser(sf.Sequences)
+	needsQO := needsQueryOpts(sf, st)
+	imports := collectImports(sf, requestParams, pathParams, needsCU, needsQO)
 
 	// package
 	pkgName := "service"
@@ -72,10 +51,10 @@ func (g *GoTarget) GenerateFunc(sf parser.ServiceFunc, st *validator.SymbolTable
 		buf.WriteString(")\n\n")
 	}
 
-	// func signature (gin)
+	// func signature
 	fmt.Fprintf(&buf, "func %s(c *gin.Context) {\n", sf.Name)
 
-	// path parameter extraction (c.Param + type conversion)
+	// path parameters
 	for _, pp := range pathParams {
 		buf.WriteString(generatePathParamCode(pp))
 	}
@@ -83,25 +62,29 @@ func (g *GoTarget) GenerateFunc(sf parser.ServiceFunc, st *validator.SymbolTable
 		buf.WriteString("\n")
 	}
 
-	// currentUser extraction (authorize 또는 @param currentUser 사용 시)
-	if needsCurrentUser(sf.Sequences) {
+	// currentUser
+	if needsCU {
 		var cuBuf bytes.Buffer
-		if err := goTemplates.ExecuteTemplate(&cuBuf, "currentUser", nil); err != nil {
-			return nil, fmt.Errorf("currentUser 템플릿 실행 실패: %w", err)
-		}
+		goTemplates.ExecuteTemplate(&cuBuf, "currentUser", nil)
 		buf.Write(cuBuf.Bytes())
 		buf.WriteString("\n")
 	}
 
-	// request 파라미터 추출 (타입 변환 포함, path param 제외)
-	for _, tp := range typedParams {
-		buf.WriteString(tp.extractCode)
+	// request parameters
+	for _, rp := range requestParams {
+		buf.WriteString(rp.extractCode)
 	}
-	if len(typedParams) > 0 {
+	if len(requestParams) > 0 {
 		buf.WriteString("\n")
 	}
 
-	// result 타입 맵 구축 (guard 비교식 결정용)
+	// QueryOpts
+	if needsQO {
+		buf.WriteString(generateQueryOptsCode(st))
+		buf.WriteString("\n")
+	}
+
+	// result types for guard checks
 	resultTypes := map[string]string{}
 	for _, seq := range sf.Sequences {
 		if seq.Result != nil {
@@ -109,23 +92,15 @@ func (g *GoTarget) GenerateFunc(sf parser.ServiceFunc, st *validator.SymbolTable
 		}
 	}
 
-	// QueryOpts 구성 코드 생성: List 메서드가 있고 QueryOpts가 존재할 때만
-	if needsQueryOpts {
-		buf.WriteString(generateQueryOptsCode(st))
-		buf.WriteString("\n")
-	}
-
-	// sequence 블록 생성
-	// 타입 변환 코드에서 err를 선언했으면 이미 선언된 것으로 처리
-	errDeclared := hasConversionErr(typedParams)
+	// sequences
+	errDeclared := hasConversionErr(requestParams)
 	funcHasTotal := false
 	for i, seq := range sf.Sequences {
-		data := buildTemplateData(seq, &errDeclared, resultTypes, st, sf.Name)
+		data := buildTemplateData(seq, &errDeclared, resultTypes, st, sf.Name, needsQO)
 		if data.HasTotal {
 			funcHasTotal = true
 		}
-		// response 시퀀스에 funcHasTotal 전달
-		if strings.HasPrefix(seq.Type, "response") {
+		if seq.Type == parser.SeqResponse {
 			data.HasTotal = funcHasTotal
 		}
 
@@ -140,7 +115,6 @@ func (g *GoTarget) GenerateFunc(sf parser.ServiceFunc, st *validator.SymbolTable
 
 	buf.WriteString("}\n")
 
-	// gofmt
 	formatted, err := format.Source(buf.Bytes())
 	if err != nil {
 		return buf.Bytes(), fmt.Errorf("gofmt 실패: %w\n--- raw ---\n%s", err, buf.String())
@@ -155,17 +129,13 @@ func (g *GoTarget) GenerateModelInterfaces(funcs []parser.ServiceFunc, st *valid
 		return fmt.Errorf("model 디렉토리 생성 실패: %w", err)
 	}
 
-	// SSaC spec에서 사용된 모델+메서드 수집
 	usages := collectModelUsages(funcs)
-
-	// 사용된 모델만 interface 생성
 	interfaces := deriveInterfaces(usages, st)
 	if len(interfaces) == 0 {
 		return nil
 	}
 
 	code := renderInterfaces(interfaces, hasQueryOpts(st))
-
 	formatted, err := format.Source(code)
 	if err != nil {
 		return fmt.Errorf("models_gen.go gofmt 실패: %w\n--- raw ---\n%s", err, string(code))
@@ -175,125 +145,117 @@ func (g *GoTarget) GenerateModelInterfaces(funcs []parser.ServiceFunc, st *valid
 	return os.WriteFile(path, formatted, 0644)
 }
 
-// --- Go 코드젠 내부 함수 ---
+// --- templateData ---
 
-// templateData는 템플릿에 전달하는 데이터다.
 type templateData struct {
 	// 공통
-	Message string
-	// get, post, put, delete
-	ModelVar    string
-	ModelMethod string
-	ParamArgs   string
-	Result      *parser.Result
-	// guard
+	Message  string
+	FirstErr bool
+
+	// get/post/put/delete
+	ModelCall string // "courseModel.FindByID"
+	ArgsCode string // "courseID, currentUser.ID"
+	Result   *parser.Result
+
+	// empty/exists
 	Target      string
-	ZeroCheck   string // "== nil", "== 0", `== ""`, "== false"
-	ExistsCheck string // "!= nil", "> 0", `!= ""`, "== true"
-	// authorize
+	ZeroCheck   string
+	ExistsCheck string
+
+	// state
+	DiagramID   string
+	Transition  string
+	InputFields string // "Status: reservation.Status, ..."
+
+	// auth
 	Action   string
 	Resource string
-	ID       string
+
 	// call
-	Func string
-	PkgName         string // @func 패키지명 (e.g. "auth")
-	PkgField        string // Handler struct 필드명 (e.g. "Auth") — 현재 미사용
-	FuncMethod      string // PascalCase 메서드명 (e.g. "HashPassword")
-	InputFields     string // Input struct 필드 (e.g. "Password: password, ...")
-	ResultField     string // Output struct에서 추출할 필드명 (e.g. "HashedPassword")
-	FuncErrStatus   string // 에러 시 HTTP status (e.g. "http.StatusInternalServerError")
-	FirstErr        bool
+	PkgName    string
+	FuncMethod string
+
 	// response
-	Vars []string
+	ResponseFields map[string]string
+
 	// list
-	HasTotal bool // many + QueryOpts → 3-tuple 반환
-	// guard state
-	Entity      string // @param의 entity 부분 (e.g. "course")
-	StatusField string // @param의 field 부분 (e.g. "Published")
-	FuncName    string // 현재 함수명 (e.g. "PublishCourse")
+	HasTotal bool
 }
 
-func buildTemplateData(seq parser.Sequence, errDeclared *bool, resultTypes map[string]string, st *validator.SymbolTable, funcName string) templateData {
+func buildTemplateData(seq parser.Sequence, errDeclared *bool, resultTypes map[string]string, st *validator.SymbolTable, funcName string, hasQO bool) templateData {
 	d := templateData{
 		Message: seq.Message,
 		Result:  seq.Result,
-		Vars:    seq.Vars,
 	}
 
-	// 모델 분리: "Project.FindByID" → "projectModel", "FindByID"
+	// Model call
 	if seq.Model != "" {
 		parts := strings.SplitN(seq.Model, ".", 2)
-		d.ModelVar = lcFirst(parts[0]) + "Model"
-		if len(parts) > 1 {
-			d.ModelMethod = parts[1]
+		if seq.Type == parser.SeqCall {
+			d.PkgName = parts[0]
+			if len(parts) > 1 {
+				d.FuncMethod = ucFirst(parts[1])
+			}
+		} else {
+			d.ModelCall = lcFirst(parts[0]) + "Model." + parts[1]
 		}
 	}
 
-	// 기본 메시지 생성
+	// Default message
 	if d.Message == "" {
 		d.Message = defaultMessage(seq)
 	}
 
-	// 파라미터 인자 문자열
-	d.ParamArgs = buildParamArgs(seq.Params)
+	// Args → code
+	d.ArgsCode = buildArgsCode(seq.Args)
 
-	// QueryOpts 자동 추가: List 메서드에만
-	if st != nil && seq.Type == parser.SeqGet && isListMethod(seq.Model) && hasAnyQueryOpts(st) {
-		if d.ParamArgs != "" {
-			d.ParamArgs += ", "
+	// QueryOpts auto-append for List methods
+	if hasQO && seq.Type == parser.SeqGet && isListMethod(seq.Model) {
+		if d.ArgsCode != "" {
+			d.ArgsCode += ", "
 		}
-		d.ParamArgs += "opts"
+		d.ArgsCode += "opts"
 		if seq.Result != nil && strings.HasPrefix(seq.Result.Type, "[]") {
 			d.HasTotal = true
 		}
 	}
 
-	// guard 대상 + 타입별 비교식
+	// Guard
 	d.Target = seq.Target
-	if seq.Type == parser.SeqGuardState && len(seq.Params) > 0 {
-		parts := strings.SplitN(seq.Params[0].Name, ".", 2)
-		d.Entity = parts[0]
-		if len(parts) > 1 {
-			d.StatusField = parts[1]
-		}
-		d.FuncName = funcName
-	}
-	if seq.Type == parser.SeqGuardNil || seq.Type == parser.SeqGuardExists {
-		typeName := resultTypes[seq.Target]
+	if seq.Type == parser.SeqEmpty || seq.Type == parser.SeqExists {
+		typeName := resultTypes[rootVar(seq.Target)]
 		d.ZeroCheck, d.ExistsCheck = zeroValueChecks(typeName)
 	}
 
-	// authorize
+	// State
+	d.DiagramID = seq.DiagramID
+	d.Transition = seq.Transition
+
+	// Auth
 	d.Action = seq.Action
 	d.Resource = seq.Resource
-	d.ID = resolveParamRef(seq.ID)
 
-	// call
-	d.Func = seq.Func
-
-	// call func with package
-	if seq.Type == parser.SeqCall && seq.Package != "" {
-		d.PkgName = seq.Package
-		d.FuncMethod = ucFirst(seq.Func)
-		d.InputFields = buildInputFields(seq.Params)
-		if seq.Result != nil {
-			if seq.Result.Field != "" {
-				d.ResultField = seq.Result.Field
-			} else {
-				d.ResultField = ucFirst(seq.Result.Var)
-			}
-		}
-		d.FuncErrStatus = "http.StatusInternalServerError"
-		if seq.Result == nil {
-			d.FuncErrStatus = "http.StatusUnauthorized"
-		}
+	// Inputs → InputFields (for state, auth, call)
+	if len(seq.Inputs) > 0 {
+		d.InputFields = buildInputFieldsFromMap(seq.Inputs)
+	}
+	if seq.Type == parser.SeqCall {
+		d.InputFields = buildCallInputFields(seq.Args)
 	}
 
-	// err 선언 추적
+	// Response
+	d.ResponseFields = seq.Fields
+
+	// err declaration tracking
 	switch seq.Type {
-	case parser.SeqAuthorize, parser.SeqGet, parser.SeqPost:
+	case parser.SeqGet, parser.SeqPost:
 		d.FirstErr = true
 		*errDeclared = true
+	case parser.SeqAuth:
+		if !*errDeclared {
+			d.FirstErr = true
+			*errDeclared = true
+		}
 	case parser.SeqCall:
 		if seq.Result != nil {
 			d.FirstErr = true
@@ -313,55 +275,127 @@ func buildTemplateData(seq parser.Sequence, errDeclared *bool, resultTypes map[s
 }
 
 func templateName(seq parser.Sequence) string {
-	if seq.Type == parser.SeqCall {
-		return "call_func"
-	}
-	if strings.HasPrefix(seq.Type, "response") {
+	switch seq.Type {
+	case parser.SeqCall:
+		if seq.Result != nil {
+			return "call_with_result"
+		}
+		return "call_no_result"
+	default:
 		return seq.Type
 	}
-	return seq.Type
 }
 
-// typedRequestParam은 request 파라미터의 타입과 추출 코드를 보관한다.
+// --- Args → Go code ---
+
+func buildArgsCode(args []parser.Arg) string {
+	var parts []string
+	for _, a := range args {
+		parts = append(parts, argToCode(a))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func argToCode(a parser.Arg) string {
+	if a.Literal != "" {
+		return `"` + a.Literal + `"`
+	}
+	if a.Source == "request" {
+		return lcFirst(a.Field)
+	}
+	if a.Source == "currentUser" || a.Source == "config" {
+		return a.Source + "." + a.Field
+	}
+	if a.Source != "" {
+		return a.Source + "." + a.Field
+	}
+	return a.Field
+}
+
+// buildInputFieldsFromMap은 map[string]string을 Go struct 리터럴 필드로 변환한다.
+func buildInputFieldsFromMap(inputs map[string]string) string {
+	keys := make([]string, 0, len(inputs))
+	for k := range inputs {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var fields []string
+	for _, k := range keys {
+		fields = append(fields, ucFirst(k)+": "+inputs[k])
+	}
+	return strings.Join(fields, ", ")
+}
+
+// buildCallInputFields는 @call의 Args를 Input struct 필드로 변환한다.
+func buildCallInputFields(args []parser.Arg) string {
+	var fields []string
+	for _, a := range args {
+		if a.Literal != "" {
+			fields = append(fields, `"` + a.Literal + `"`)
+			continue
+		}
+		fieldName := ucFirst(a.Field)
+		value := argToCode(a)
+		fields = append(fields, fieldName+": "+value)
+	}
+	return strings.Join(fields, ", ")
+}
+
+// --- request parameter extraction ---
+
 type typedRequestParam struct {
-	name        string // PascalCase 원본명
-	goType      string // "string", "int64", "time.Time" 등
-	extractCode string // 추출 코드 (줄바꿈 포함)
+	name        string
+	goType      string
+	extractCode string
 }
 
-// collectTypedRequestParams는 source가 "request"인 파라미터를 수집하고 DDL 타입을 결정한다.
-// pathParamSet에 포함된 파라미터는 함수 인자로 이미 받으므로 제외한다.
-// request 파라미터가 2개 이상이면 JSON body로 간주하여 struct decode 코드를 생성한다.
-func collectTypedRequestParams(seqs []parser.Sequence, st *validator.SymbolTable, pathParamSet map[string]bool) []typedRequestParam {
+func collectRequestParams(seqs []parser.Sequence, st *validator.SymbolTable, pathParamSet map[string]bool) []typedRequestParam {
 	seen := map[string]bool{}
 	var rawParams []struct {
 		name   string
 		goType string
 	}
+
 	for _, seq := range seqs {
-		for _, p := range seq.Params {
-			if p.Source != "request" || seen[p.Name] || pathParamSet[p.Name] {
+		for _, a := range seq.Args {
+			if a.Source != "request" || seen[a.Field] || pathParamSet[a.Field] {
 				continue
 			}
-			seen[p.Name] = true
-
+			seen[a.Field] = true
 			goType := "string"
 			if st != nil {
-				goType = lookupDDLType(p.Name, st)
+				goType = lookupDDLType(a.Field, st)
 			}
 			rawParams = append(rawParams, struct {
 				name   string
 				goType string
-			}{p.Name, goType})
+			}{a.Field, goType})
+		}
+		// Also check Inputs for request references
+		for _, val := range seq.Inputs {
+			if strings.HasPrefix(val, "request.") {
+				field := val[len("request."):]
+				if !seen[field] && !pathParamSet[field] {
+					seen[field] = true
+					goType := "string"
+					if st != nil {
+						goType = lookupDDLType(field, st)
+					}
+					rawParams = append(rawParams, struct {
+						name   string
+						goType string
+					}{field, goType})
+				}
+			}
 		}
 	}
 
-	// 심볼 테이블이 있고 request 파라미터가 2개 이상이면 JSON body struct decode
+	// 2+ params → JSON body
 	if st != nil && len(rawParams) >= 2 {
 		return buildJSONBodyParams(rawParams)
 	}
 
-	// 1개 이하면 기존 FormValue 방식
 	var params []typedRequestParam
 	for _, rp := range rawParams {
 		varName := lcFirst(rp.name)
@@ -375,52 +409,40 @@ func collectTypedRequestParams(seqs []parser.Sequence, st *validator.SymbolTable
 	return params
 }
 
-// buildJSONBodyParams는 JSON body struct decode + 변수 추출 코드를 생성한다.
 func buildJSONBodyParams(rawParams []struct {
 	name   string
 	goType string
 }) []typedRequestParam {
 	var buf bytes.Buffer
 
-	// struct 정의
 	buf.WriteString("\tvar req struct {\n")
 	for _, rp := range rawParams {
 		buf.WriteString(fmt.Sprintf("\t\t%s %s `json:\"%s\"`\n", rp.name, rp.goType, rp.name))
 	}
 	buf.WriteString("\t}\n")
-
-	// decode
 	buf.WriteString("\tif err := c.ShouldBindJSON(&req); err != nil {\n")
 	buf.WriteString("\t\tc.JSON(http.StatusBadRequest, gin.H{\"error\": \"invalid request body\"})\n")
 	buf.WriteString("\t\treturn\n")
 	buf.WriteString("\t}\n")
-
-	// 변수 추출
 	for _, rp := range rawParams {
 		varName := lcFirst(rp.name)
 		buf.WriteString(fmt.Sprintf("\t%s := req.%s\n", varName, rp.name))
 	}
 
-	// 전체 코드를 json_body 엔트리에 담고, time.Time import 힌트도 추가
 	result := []typedRequestParam{{
 		name:        "_json_body",
 		goType:      "json_body",
 		extractCode: buf.String(),
 	}}
-	// time.Time은 struct 필드에 사용되므로 import 필요 (strconv 등은 불필요)
 	for _, rp := range rawParams {
 		if rp.goType == "time.Time" {
-			result = append(result, typedRequestParam{
-				name:   rp.name,
-				goType: rp.goType,
-			})
+			result = append(result, typedRequestParam{name: rp.name, goType: rp.goType})
 			break
 		}
 	}
 	return result
 }
 
-// lookupDDLType은 PascalCase 파라미터명을 snake_case로 변환하여 DDL 컬럼 타입을 조회한다.
 func lookupDDLType(paramName string, st *validator.SymbolTable) string {
 	snakeName := toSnakeCase(paramName)
 	for _, table := range st.DDLTables {
@@ -431,7 +453,6 @@ func lookupDDLType(paramName string, st *validator.SymbolTable) string {
 	return "string"
 }
 
-// generateExtractCode는 타입별 request 파라미터 추출 코드를 생성한다.
 func generateExtractCode(varName, paramName, goType string) string {
 	switch goType {
 	case "int64":
@@ -458,133 +479,11 @@ func generateExtractCode(varName, paramName, goType string) string {
 			"\t\tc.JSON(http.StatusBadRequest, gin.H{\"error\": \"%s: 유효하지 않은 값\"})\n"+
 			"\t\treturn\n"+
 			"\t}\n", varName, paramName, paramName)
-	default: // string
+	default:
 		return fmt.Sprintf("\t%s := c.Query(%q)\n", varName, paramName)
 	}
 }
 
-// collectImports는 사용된 패키지를 수집한다.
-// specImports는 spec 파일의 Go import 선언에서 가져온 경로다.
-func collectImports(seqs []parser.Sequence, typedParams []typedRequestParam, specImports []string, hasPathParams bool, hasQueryOpts bool) []string {
-	seen := map[string]bool{
-		"net/http":                  true, // status code 상수
-		"github.com/gin-gonic/gin": true, // 항상 사용
-	}
-
-	for _, seq := range seqs {
-		if seq.Type == parser.SeqGuardState {
-			seen["states/"+seq.Target+"state"] = true
-		}
-	}
-
-	for _, tp := range typedParams {
-		switch tp.goType {
-		case "int64", "float64", "bool":
-			seen["strconv"] = true
-		case "time.Time":
-			seen["time"] = true
-		}
-	}
-
-	// path param 타입 변환 또는 QueryOpts 파싱에 strconv 필요
-	if hasPathParams || hasQueryOpts {
-		seen["strconv"] = true
-	}
-
-	var imports []string
-	order := []string{"net/http", "strconv", "time"}
-	for _, imp := range order {
-		if seen[imp] {
-			imports = append(imports, imp)
-			delete(seen, imp)
-		}
-	}
-	// 동적 import (states/*state, gin 등)
-	var dynamic []string
-	for imp := range seen {
-		dynamic = append(dynamic, imp)
-	}
-	sort.Strings(dynamic)
-	imports = append(imports, dynamic...)
-	// spec 파일의 import (func 패키지 등)
-	for _, imp := range specImports {
-		imports = append(imports, imp)
-	}
-	return imports
-}
-
-// buildParamArgs는 Param 슬라이스를 함수 호출 인자 문자열로 변환한다.
-func buildParamArgs(params []parser.Param) string {
-	var args []string
-	for _, p := range params {
-		args = append(args, resolveParam(p))
-	}
-	return strings.Join(args, ", ")
-}
-
-// resolveParam은 Param의 source를 고려하여 Go 표현식으로 변환한다.
-func resolveParam(p parser.Param) string {
-	if p.Source == "currentUser" || p.Source == "config" {
-		return p.Source + "." + p.Name
-	}
-	return resolveParamRef(p.Name)
-}
-
-// resolveParamRef는 파라미터 참조를 Go 표현식으로 변환한다.
-func resolveParamRef(name string) string {
-	if name == "" {
-		return ""
-	}
-	if name == "new" {
-		return "nil"
-	}
-	if strings.HasPrefix(name, `"`) {
-		return name
-	}
-	if strings.Contains(name, ".") {
-		return name
-	}
-	return lcFirst(name)
-}
-
-// ucFirst는 첫 글자를 대문자로 변환한다.
-func ucFirst(s string) string {
-	if s == "" {
-		return s
-	}
-	return strings.ToUpper(s[:1]) + s[1:]
-}
-
-// buildInputFields는 @param 리스트를 Input struct 필드 문자열로 변환한다.
-// @param Password request → "Password: password"
-// @param user.PasswordHash → "PasswordHash: user.PasswordHash"
-func buildInputFields(params []parser.Param) string {
-	var fields []string
-	for _, p := range params {
-		fieldName := p.Name
-		fieldValue := resolveParam(p)
-
-		// dot notation: "user.PasswordHash" → fieldName="PasswordHash", fieldValue="user.PasswordHash"
-		if strings.Contains(p.Name, ".") {
-			parts := strings.SplitN(p.Name, ".", 2)
-			fieldName = parts[1]
-			fieldValue = p.Name
-		}
-		// request source: fieldName stays, fieldValue is lcFirst
-		if p.Source == "request" {
-			fieldValue = lcFirst(p.Name)
-		}
-		// -> 매핑: Request struct 필드명을 명시적으로 지정
-		if p.Column != "" {
-			fieldName = p.Column
-		}
-
-		fields = append(fields, fieldName+": "+fieldValue)
-	}
-	return strings.Join(fields, ", ")
-}
-
-// generatePathParamCode는 gin의 c.Param() + 타입 변환 코드를 생성한다.
 func generatePathParamCode(pp validator.PathParam) string {
 	varName := lcFirst(pp.Name)
 	switch pp.GoType {
@@ -602,19 +501,87 @@ func generatePathParamCode(pp validator.PathParam) string {
 			"\t\tc.JSON(http.StatusBadRequest, gin.H{\"error\": \"invalid path parameter\"})\n"+
 			"\t\treturn\n"+
 			"\t}\n", varName, pp.Name, varName, varName)
-	default: // string
+	default:
 		return fmt.Sprintf("\t%s := c.Param(%q)\n", varName, pp.Name)
 	}
 }
 
-// needsCurrentUser는 authorize 시퀀스 또는 @param currentUser가 있는지 확인한다.
+// --- imports ---
+
+func collectImports(sf parser.ServiceFunc, reqParams []typedRequestParam, pathParams []validator.PathParam, needsCU bool, needsQO bool) []string {
+	seen := map[string]bool{
+		"net/http":                  true,
+		"github.com/gin-gonic/gin": true,
+	}
+
+	for _, seq := range sf.Sequences {
+		if seq.Type == parser.SeqState {
+			seen["states/"+seq.DiagramID+"state"] = true
+		}
+		if seq.Type == parser.SeqAuth {
+			seen["authz"] = true
+		}
+	}
+
+	for _, tp := range reqParams {
+		switch tp.goType {
+		case "int64", "float64", "bool":
+			seen["strconv"] = true
+		case "time.Time":
+			seen["time"] = true
+		}
+	}
+
+	hasNonStringPathParam := false
+	for _, pp := range pathParams {
+		if pp.GoType != "string" {
+			hasNonStringPathParam = true
+			break
+		}
+	}
+	if hasNonStringPathParam || needsQO {
+		seen["strconv"] = true
+	}
+
+	if needsCU {
+		seen["model"] = true
+	}
+
+	var imports []string
+	order := []string{"net/http", "strconv", "time"}
+	for _, imp := range order {
+		if seen[imp] {
+			imports = append(imports, imp)
+			delete(seen, imp)
+		}
+	}
+	var dynamic []string
+	for imp := range seen {
+		dynamic = append(dynamic, imp)
+	}
+	sort.Strings(dynamic)
+	imports = append(imports, dynamic...)
+
+	for _, imp := range sf.Imports {
+		imports = append(imports, imp)
+	}
+	return imports
+}
+
+// --- helpers ---
+
 func needsCurrentUser(seqs []parser.Sequence) bool {
 	for _, seq := range seqs {
-		if seq.Type == parser.SeqAuthorize {
+		if seq.Type == parser.SeqAuth {
 			return true
 		}
-		for _, p := range seq.Params {
-			if p.Source == "currentUser" {
+		for _, a := range seq.Args {
+			if a.Source == "currentUser" {
+				return true
+			}
+		}
+		for _, val := range seq.Inputs {
+			if strings.HasPrefix(val, "currentUser.") {
 				return true
 			}
 		}
@@ -622,12 +589,35 @@ func needsCurrentUser(seqs []parser.Sequence) bool {
 	return false
 }
 
-// generateQueryOptsCode는 gin의 c.Query()를 사용한 QueryOpts 파싱 코드를 생성한다.
+func needsQueryOpts(sf parser.ServiceFunc, st *validator.SymbolTable) bool {
+	if st == nil {
+		return false
+	}
+	if !hasAnyQueryOpts(st) {
+		return false
+	}
+	for _, seq := range sf.Sequences {
+		if seq.Type == parser.SeqGet && isListMethod(seq.Model) {
+			return true
+		}
+	}
+	return false
+}
+
+func getPathParams(funcName string, st *validator.SymbolTable) []validator.PathParam {
+	if st == nil {
+		return nil
+	}
+	if op, ok := st.Operations[funcName]; ok {
+		return op.PathParams
+	}
+	return nil
+}
+
 func generateQueryOptsCode(st *validator.SymbolTable) string {
 	var buf bytes.Buffer
 	buf.WriteString("\topts := QueryOpts{}\n")
 
-	// 심볼 테이블에서 어떤 query opts가 필요한지 확인
 	hasPagination := false
 	hasSort := false
 	for _, op := range st.Operations {
@@ -672,18 +662,15 @@ func defaultMessage(seq parser.Sequence) string {
 		return modelName + " 수정 실패"
 	case parser.SeqDelete:
 		return modelName + " 삭제 실패"
-	case parser.SeqGuardNil:
+	case parser.SeqEmpty:
 		return seq.Target + "가 존재하지 않습니다"
-	case parser.SeqGuardExists:
+	case parser.SeqExists:
 		return seq.Target + "가 이미 존재합니다"
-	case parser.SeqGuardState:
+	case parser.SeqState:
 		return "상태 전이가 허용되지 않습니다"
-	case parser.SeqAuthorize:
+	case parser.SeqAuth:
 		return "권한이 없습니다"
 	case parser.SeqCall:
-		if seq.Func != "" {
-			return seq.Func + " 호출 실패"
-		}
 		return "호출 실패"
 	}
 	return "처리 실패"
@@ -702,7 +689,6 @@ func zeroValueChecks(typeName string) (zeroCheck, existsCheck string) {
 	}
 }
 
-// isListMethod는 모델 메서드명이 List로 시작하는지 확인한다.
 func isListMethod(model string) bool {
 	parts := strings.SplitN(model, ".", 2)
 	if len(parts) < 2 {
@@ -711,7 +697,6 @@ func isListMethod(model string) bool {
 	return strings.HasPrefix(parts[1], "List")
 }
 
-// hasAnyQueryOpts는 심볼 테이블에 QueryOpts를 가진 operation이 있는지 확인한다.
 func hasAnyQueryOpts(st *validator.SymbolTable) bool {
 	if st == nil {
 		return false
@@ -733,12 +718,19 @@ func hasConversionErr(params []typedRequestParam) bool {
 	return false
 }
 
+func rootVar(s string) string {
+	if idx := strings.Index(s, "."); idx >= 0 {
+		return s[:idx]
+	}
+	return s
+}
+
 // --- Model 인터페이스 파생 ---
 
 type modelUsage struct {
 	ModelName  string
 	MethodName string
-	Params     []parser.Param
+	Args       []parser.Arg
 	Result     *parser.Result
 	FuncName   string
 }
@@ -747,7 +739,7 @@ func collectModelUsages(funcs []parser.ServiceFunc) []modelUsage {
 	var usages []modelUsage
 	for _, sf := range funcs {
 		for _, seq := range sf.Sequences {
-			if seq.Model == "" {
+			if seq.Model == "" || seq.Type == parser.SeqCall {
 				continue
 			}
 			parts := strings.SplitN(seq.Model, ".", 2)
@@ -757,7 +749,7 @@ func collectModelUsages(funcs []parser.ServiceFunc) []modelUsage {
 			usages = append(usages, modelUsage{
 				ModelName:  parts[0],
 				MethodName: parts[1],
-				Params:     seq.Params,
+				Args:       seq.Args,
 				Result:     seq.Result,
 				FuncName:   sf.Name,
 			})
@@ -836,51 +828,14 @@ func deriveInterfaces(usages []modelUsage, st *validator.SymbolTable) []derivedI
 
 			dm := derivedMethod{Name: methodName}
 
-			// 이름 있는 파라미터의 snake_case 수집 (리터럴 역매핑용)
-			usedColumns := map[string]bool{}
-			tableName := toSnakeCase(modelName) + "s"
-			for _, p := range usage.Params {
-				if !strings.HasPrefix(p.Name, `"`) {
-					if strings.Contains(p.Name, ".") {
-						parts := strings.SplitN(p.Name, ".", 2)
-						usedColumns[toSnakeCase(parts[1])] = true
-						// 복합 컬럼명도 추가: enrollment.ID → enrollment_id
-						usedColumns[toSnakeCase(parts[0])+"_"+toSnakeCase(parts[1])] = true
-					} else {
-						snake := toSnakeCase(p.Name)
-						usedColumns[snake] = true
-						// 변수 참조: DDL 컬럼과 부분 매칭으로 제외
-						if p.Source == "" {
-							if table, ok := st.DDLTables[tableName]; ok {
-								if _, exists := table.Columns[snake]; !exists {
-									words := splitCamelWords(p.Name)
-									for col := range table.Columns {
-										for _, w := range words {
-											if strings.Contains(col, strings.ToLower(w)) {
-												usedColumns[col] = true
-											}
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-
-			for _, p := range usage.Params {
+			for _, a := range usage.Args {
 				dp := derivedParam{
-					Name:   resolveParamName(p),
-					GoType: resolveParamType(p, usage.ModelName, st),
+					Name:   resolveArgParamName(a),
+					GoType: resolveArgParamType(a, usage.ModelName, st),
 				}
-				// 리터럴 파라미터: DDL 역매핑으로 이름 결정
-				if strings.HasPrefix(p.Name, `"`) {
-					dp.Name = resolveLiteralParamName(modelName, usedColumns, st)
-					if dp.Name != "" {
-						usedColumns[toSnakeCase(dp.Name)] = true
-					}
+				if dp.Name != "" {
+					dm.Params = append(dm.Params, dp)
 				}
-				dm.Params = append(dm.Params, dp)
 			}
 
 			if op, ok := st.Operations[usage.FuncName]; ok && op.HasQueryOpts() {
@@ -888,7 +843,6 @@ func deriveInterfaces(usages []modelUsage, st *validator.SymbolTable) []derivedI
 			}
 
 			dm.ReturnType = deriveReturnType(mi, usage, dm.HasQueryOpts)
-
 			iface.Methods = append(iface.Methods, dm)
 		}
 
@@ -900,44 +854,38 @@ func deriveInterfaces(usages []modelUsage, st *validator.SymbolTable) []derivedI
 	return interfaces
 }
 
-func resolveParamName(p parser.Param) string {
-	name := p.Name
-	if strings.HasPrefix(name, `"`) {
-		return "" // 리터럴 → deriveInterfaces에서 DDL 역매핑으로 이름 결정
+func resolveArgParamName(a parser.Arg) string {
+	if a.Literal != "" {
+		return lcFirst(a.Literal) // 리터럴은 값 자체를 이름으로 사용
 	}
-	if strings.Contains(name, ".") {
-		// "enrollment.ID" → "enrollmentID", "course.Price" → "coursePrice"
-		parts := strings.SplitN(name, ".", 2)
-		field := parts[1]
-		if len(field) > 0 {
-			field = strings.ToUpper(field[:1]) + field[1:]
-		}
-		return parts[0] + field
+	if a.Source == "request" || a.Source == "currentUser" {
+		return lcFirst(a.Field)
 	}
-	return lcFirst(name)
+	if a.Source != "" {
+		return a.Source + ucFirst(a.Field)
+	}
+	return lcFirst(a.Field)
 }
 
-func resolveParamType(p parser.Param, modelName string, st *validator.SymbolTable) string {
-	if strings.HasPrefix(p.Name, `"`) {
+func resolveArgParamType(a parser.Arg, modelName string, st *validator.SymbolTable) string {
+	if a.Literal != "" {
 		return "string"
 	}
 
-	// dot notation: "enrollment.ID" → enrollments 테이블의 id 컬럼
-	if strings.Contains(p.Name, ".") {
-		parts := strings.SplitN(p.Name, ".", 2)
-		refTable := toSnakeCase(parts[0]) + "s"
-		refCol := toSnakeCase(parts[1])
+	// source.Field → source 테이블의 field 컬럼 조회
+	if a.Source != "" && a.Source != "request" && a.Source != "currentUser" {
+		refTable := toSnakeCase(a.Source) + "s"
+		refCol := toSnakeCase(a.Field)
 		if table, ok := st.DDLTables[refTable]; ok {
 			if goType, ok := table.Columns[refCol]; ok {
 				return goType
 			}
 		}
-		return "string"
 	}
 
-	snakeName := toSnakeCase(p.Name)
+	snakeName := toSnakeCase(a.Field)
 
-	// 1. 해당 모델의 테이블에서 직접 조회
+	// 해당 모델 테이블
 	tableName := toSnakeCase(modelName) + "s"
 	if table, ok := st.DDLTables[tableName]; ok {
 		if goType, ok := table.Columns[snakeName]; ok {
@@ -945,9 +893,9 @@ func resolveParamType(p parser.Param, modelName string, st *validator.SymbolTabl
 		}
 	}
 
-	// 2. {Model}ID 패턴: CourseID → courses.id
-	if strings.HasSuffix(p.Name, "ID") {
-		refModel := p.Name[:len(p.Name)-2]
+	// {Model}ID 패턴
+	if strings.HasSuffix(a.Field, "ID") {
+		refModel := a.Field[:len(a.Field)-2]
 		refTable := toSnakeCase(refModel) + "s"
 		if table, ok := st.DDLTables[refTable]; ok {
 			if goType, ok := table.Columns["id"]; ok {
@@ -956,7 +904,7 @@ func resolveParamType(p parser.Param, modelName string, st *validator.SymbolTabl
 		}
 	}
 
-	// 3. 전체 테이블 순회
+	// 전체 순회
 	for _, table := range st.DDLTables {
 		if goType, ok := table.Columns[snakeName]; ok {
 			return goType
@@ -964,56 +912,6 @@ func resolveParamType(p parser.Param, modelName string, st *validator.SymbolTabl
 	}
 
 	return "string"
-}
-
-// resolveLiteralParamName은 리터럴 파라미터의 이름을 DDL 역매핑으로 결정한다.
-// 모델 테이블에서 이미 사용된 컬럼을 제외하고 DDL 정의 순서로 첫 번째 string 컬럼을 선택한다.
-func resolveLiteralParamName(modelName string, usedColumns map[string]bool, st *validator.SymbolTable) string {
-	tableName := toSnakeCase(modelName) + "s"
-	table, ok := st.DDLTables[tableName]
-	if !ok {
-		return ""
-	}
-
-	autoColumns := map[string]bool{
-		"id": true, "created_at": true, "updated_at": true, "deleted_at": true,
-	}
-
-	// DDL 정의 순서로 순회
-	for _, col := range table.ColumnOrder {
-		goType := table.Columns[col]
-		if autoColumns[col] || usedColumns[col] || goType != "string" {
-			continue
-		}
-		return lcFirst(snakeToCamel(col))
-	}
-	return ""
-}
-
-// splitCamelWords는 camelCase 문자열을 단어로 분리한다.
-// "hashedPassword" → ["hashed", "Password"]
-func splitCamelWords(s string) []string {
-	var words []string
-	start := 0
-	for i := 1; i < len(s); i++ {
-		if s[i] >= 'A' && s[i] <= 'Z' {
-			words = append(words, s[start:i])
-			start = i
-		}
-	}
-	words = append(words, s[start:])
-	return words
-}
-
-// snakeToCamel은 snake_case를 camelCase로 변환한다.
-func snakeToCamel(s string) string {
-	parts := strings.Split(s, "_")
-	for i := range parts {
-		if len(parts[i]) > 0 {
-			parts[i] = strings.ToUpper(parts[i][:1]) + parts[i][1:]
-		}
-	}
-	return strings.Join(parts, "")
 }
 
 func deriveReturnType(mi validator.MethodInfo, usage modelUsage, hasQueryOpts bool) string {
@@ -1066,12 +964,12 @@ func renderInterfaces(interfaces []derivedInterface, needQueryOpts bool) []byte 
 
 	if needQueryOpts {
 		buf.WriteString(`type QueryOpts struct {
-	Limit    int
-	Offset   int
-	Cursor   string
-	SortCol  string
-	SortDir  string
-	Filters  map[string]string
+	Limit   int
+	Offset  int
+	Cursor  string
+	SortCol string
+	SortDir string
+	Filters map[string]string
 }
 `)
 	}
@@ -1113,15 +1011,6 @@ func needsTimeImport(interfaces []derivedInterface) bool {
 }
 
 func sortedKeys(m map[string]bool) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-func sortedMethodKeys(m map[string]validator.MethodInfo) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)

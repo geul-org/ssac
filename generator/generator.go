@@ -11,13 +11,11 @@ import (
 )
 
 // Generate는 []ServiceFunc를 받아 outDir에 Go 파일을 생성한다.
-// st가 non-nil이면 DDL 타입 기반 변환 코드를 생성한다.
 func Generate(funcs []parser.ServiceFunc, outDir string, st *validator.SymbolTable) error {
 	return GenerateWith(DefaultTarget(), funcs, outDir, st)
 }
 
 // GenerateFunc는 단일 ServiceFunc의 Go 코드를 생성한다.
-// st가 non-nil이면 DDL 타입 기반 변환 코드를 생성한다.
 func GenerateFunc(sf parser.ServiceFunc, st *validator.SymbolTable) ([]byte, error) {
 	return DefaultTarget().GenerateFunc(sf, st)
 }
@@ -62,19 +60,24 @@ func lcFirst(s string) string {
 	return strings.ToLower(s[:1]) + s[1:]
 }
 
+// ucFirst는 첫 글자를 대문자로 변환한다.
+func ucFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
+}
+
 // toSnakeCase는 PascalCase/camelCase를 snake_case로 변환한다.
-// 연속 대문자(ID, URL 등)를 올바르게 처리한다: RoomID → room_id, UserURL → user_url
 func toSnakeCase(s string) string {
 	var result []byte
 	for i, c := range s {
 		if c >= 'A' && c <= 'Z' {
 			if i > 0 {
 				prev := s[i-1]
-				// 이전이 소문자면 무조건 언더스코어
 				if prev >= 'a' && prev <= 'z' {
 					result = append(result, '_')
 				} else if prev >= 'A' && prev <= 'Z' && i+1 < len(s) && s[i+1] >= 'a' && s[i+1] <= 'z' {
-					// 이전도 대문자이고 다음이 소문자면 언더스코어 (e.g. URLParser → url_parser)
 					result = append(result, '_')
 				}
 			}

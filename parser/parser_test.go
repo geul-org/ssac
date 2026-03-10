@@ -3,618 +3,440 @@ package parser
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 )
 
-func specsDir() string {
-	_, file, _, _ := runtime.Caller(0)
-	return filepath.Join(filepath.Dir(file), "..", "testdata", "backend-service")
-}
+func TestParseGet(t *testing.T) {
+	src := `package service
 
-func TestParseCreateSession(t *testing.T) {
-	sf, err := ParseFile(filepath.Join(specsDir(), "create_session.go"))
-	if err != nil {
-		t.Fatalf("파싱 실패: %v", err)
-	}
-	if sf == nil {
-		t.Fatal("ServiceFunc가 nil")
-	}
-
-	if sf.Name != "CreateSession" {
-		t.Errorf("함수명: got %q, want %q", sf.Name, "CreateSession")
-	}
-	if sf.FileName != "create_session.go" {
-		t.Errorf("파일명: got %q, want %q", sf.FileName, "create_session.go")
-	}
-	if len(sf.Sequences) != 4 {
-		t.Fatalf("sequence 수: got %d, want 4", len(sf.Sequences))
-	}
-
-	// sequence 0: get
-	s := sf.Sequences[0]
-	assertStr(t, "seq[0].Type", s.Type, "get")
-	assertStr(t, "seq[0].Model", s.Model, "Project.FindByID")
-	assertParams(t, "seq[0].Params", s.Params, []Param{{Name: "ProjectID", Source: "request"}})
-	assertResult(t, "seq[0].Result", s.Result, "project", "Project")
-
-	// sequence 1: guard nil
-	s = sf.Sequences[1]
-	assertStr(t, "seq[1].Type", s.Type, "guard nil")
-	assertStr(t, "seq[1].Target", s.Target, "project")
-	assertStr(t, "seq[1].Message", s.Message, "프로젝트가 존재하지 않습니다")
-
-	// sequence 2: post
-	s = sf.Sequences[2]
-	assertStr(t, "seq[2].Type", s.Type, "post")
-	assertStr(t, "seq[2].Model", s.Model, "Session.Create")
-	assertParams(t, "seq[2].Params", s.Params, []Param{
-		{Name: "ProjectID", Source: "request"},
-		{Name: "Command", Source: "request"},
-	})
-	assertResult(t, "seq[2].Result", s.Result, "session", "Session")
-
-	// sequence 3: response json
-	s = sf.Sequences[3]
-	assertStr(t, "seq[3].Type", s.Type, "response json")
-	assertStrSlice(t, "seq[3].Vars", s.Vars, []string{"session"})
-}
-
-func TestParseDeleteProject(t *testing.T) {
-	sf, err := ParseFile(filepath.Join(specsDir(), "delete_project.go"))
-	if err != nil {
-		t.Fatalf("파싱 실패: %v", err)
-	}
-	if sf == nil {
-		t.Fatal("ServiceFunc가 nil")
-	}
-
-	if sf.Name != "DeleteProject" {
-		t.Errorf("함수명: got %q, want %q", sf.Name, "DeleteProject")
-	}
-	if len(sf.Sequences) != 8 {
-		t.Fatalf("sequence 수: got %d, want 8", len(sf.Sequences))
-	}
-
-	// sequence 0: authorize
-	s := sf.Sequences[0]
-	assertStr(t, "seq[0].Type", s.Type, "authorize")
-	assertStr(t, "seq[0].Action", s.Action, "delete")
-	assertStr(t, "seq[0].Resource", s.Resource, "project")
-	assertStr(t, "seq[0].ID", s.ID, "ProjectID")
-
-	// sequence 1: get
-	s = sf.Sequences[1]
-	assertStr(t, "seq[1].Type", s.Type, "get")
-	assertStr(t, "seq[1].Model", s.Model, "Project.FindByID")
-
-	// sequence 2: guard nil
-	s = sf.Sequences[2]
-	assertStr(t, "seq[2].Type", s.Type, "guard nil")
-	assertStr(t, "seq[2].Target", s.Target, "project")
-
-	// sequence 3: get (SessionCount)
-	s = sf.Sequences[3]
-	assertStr(t, "seq[3].Type", s.Type, "get")
-	assertStr(t, "seq[3].Model", s.Model, "Session.CountByProjectID")
-	assertResult(t, "seq[3].Result", s.Result, "sessionCount", "int")
-
-	// sequence 4: guard exists
-	s = sf.Sequences[4]
-	assertStr(t, "seq[4].Type", s.Type, "guard exists")
-	assertStr(t, "seq[4].Target", s.Target, "sessionCount")
-	assertStr(t, "seq[4].Message", s.Message, "하위 세션이 존재하여 삭제할 수 없습니다")
-
-	// sequence 5: call @func with package
-	s = sf.Sequences[5]
-	assertStr(t, "seq[5].Type", s.Type, "call")
-	assertStr(t, "seq[5].Package", s.Package, "cleanup")
-	assertStr(t, "seq[5].Func", s.Func, "projectResources")
-	assertParams(t, "seq[5].Params", s.Params, []Param{{Name: "project"}})
-	assertResult(t, "seq[5].Result", s.Result, "cleaned", "bool")
-
-	// sequence 6: delete
-	s = sf.Sequences[6]
-	assertStr(t, "seq[6].Type", s.Type, "delete")
-	assertStr(t, "seq[6].Model", s.Model, "Project.Delete")
-
-	// sequence 7: response json
-	s = sf.Sequences[7]
-	assertStr(t, "seq[7].Type", s.Type, "response json")
-}
-
-func TestParseDir(t *testing.T) {
-	funcs, err := ParseDir(specsDir())
-	if err != nil {
-		t.Fatalf("디렉토리 파싱 실패: %v", err)
-	}
-	if len(funcs) != 2 {
-		t.Errorf("함수 수: got %d, want 2", len(funcs))
-	}
-}
-
-// --- 유닛 테스트: parseTag ---
-
-func TestParseTag(t *testing.T) {
-	tests := []struct {
-		line     string
-		wantTag  string
-		wantVal  string
-	}{
-		{"@sequence get", "sequence", "get"},
-		{"@model Project.FindByID", "model", "Project.FindByID"},
-		{"@param ProjectID request", "param", "ProjectID request"},
-		{"@result project Project", "result", "project Project"},
-		{"@message \"커스텀 메시지\"", "message", "\"커스텀 메시지\""},
-		{"@var session", "var", "session"},
-		{"@action delete", "action", "delete"},
-		{"@sequence guard nil project", "sequence", "guard nil project"},
-		{"@func cleanup.projectResources", "func", "cleanup.projectResources"},
-		{"@id ProjectID", "id", "ProjectID"},
-		{"@resource project", "resource", "project"},
-		// 값 없는 태그
-		{"@sequence", "sequence", ""},
-	}
-
-	for _, tt := range tests {
-		tag, val := parseTag(tt.line)
-		if tag != tt.wantTag || val != tt.wantVal {
-			t.Errorf("parseTag(%q) = (%q, %q), want (%q, %q)", tt.line, tag, val, tt.wantTag, tt.wantVal)
-		}
-	}
-}
-
-// --- 유닛 테스트: parseSequenceType ---
-
-func TestParseSequenceType(t *testing.T) {
-	tests := []struct {
-		value string
-		want  string
-	}{
-		{"get", "get"},
-		{"post", "post"},
-		{"put", "put"},
-		{"delete", "delete"},
-		{"authorize", "authorize"},
-		{"call", "call"},
-		{"guard nil project", "guard nil"},
-		{"guard exists sessionCount", "guard exists"},
-		{"response json", "response json"},
-		{"response redirect", "response redirect"},
-		{"response view", "response view"},
-		// guard + 유효하지 않은 서브타입 → guard만
-		{"guard something", "guard"},
-	}
-
-	for _, tt := range tests {
-		got := parseSequenceType(tt.value)
-		if got != tt.want {
-			t.Errorf("parseSequenceType(%q) = %q, want %q", tt.value, got, tt.want)
-		}
-	}
-}
-
-// --- 유닛 테스트: parseParam ---
-
-func TestParseParam(t *testing.T) {
-	tests := []struct {
-		value string
-		want  Param
-	}{
-		{"ProjectID request", Param{Name: "ProjectID", Source: "request"}},
-		{"Command request", Param{Name: "Command", Source: "request"}},
-		// 변수 참조 (source 없음)
-		{"project", Param{Name: "project"}},
-		// dot notation
-		{"project.OwnerEmail", Param{Name: "project.OwnerEmail"}},
-		// 따옴표 리터럴
-		{`"프로젝트가 삭제됩니다"`, Param{Name: `"프로젝트가 삭제됩니다"`}},
-		{`"hello world"`, Param{Name: `"hello world"`}},
-		// -> column 매핑
-		{"PaymentMethod request -> method", Param{Name: "PaymentMethod", Source: "request", Column: "method"}},
-		{"Status request -> status_code", Param{Name: "Status", Source: "request", Column: "status_code"}},
-		// -> 없으면 Column 비어있음
-		{"Name request", Param{Name: "Name", Source: "request", Column: ""}},
-	}
-
-	for _, tt := range tests {
-		got := parseParam(tt.value)
-		if got.Name != tt.want.Name || got.Source != tt.want.Source || got.Column != tt.want.Column {
-			t.Errorf("parseParam(%q) = %+v, want %+v", tt.value, got, tt.want)
-		}
-	}
-}
-
-// --- 유닛 테스트: parseResult ---
-
-func TestParseResult(t *testing.T) {
-	tests := []struct {
-		value     string
-		wantVar   string
-		wantType  string
-		wantField string
-	}{
-		{"project Project", "project", "Project", ""},
-		{"session Session", "session", "Session", ""},
-		{"sessionCount int", "sessionCount", "int", ""},
-		{"cleaned bool", "cleaned", "bool", ""},
-		// 타입 없는 경우
-		{"project", "project", "", ""},
-		// Type.Field 형식
-		{"token Token.AccessToken", "token", "Token", "AccessToken"},
-		{"refund Refund.Amount", "refund", "Refund", "Amount"},
-	}
-
-	for _, tt := range tests {
-		got := parseResult(tt.value)
-		if got.Var != tt.wantVar || got.Type != tt.wantType || got.Field != tt.wantField {
-			t.Errorf("parseResult(%q) = (%q, %q, %q), want (%q, %q, %q)",
-				tt.value, got.Var, got.Type, got.Field, tt.wantVar, tt.wantType, tt.wantField)
-		}
-	}
-}
-
-// --- 유닛 테스트: trimQuotes ---
-
-func TestTrimQuotes(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{`"hello"`, "hello"},
-		{`"프로젝트가 존재하지 않습니다"`, "프로젝트가 존재하지 않습니다"},
-		{"no quotes", "no quotes"},
-		{`""`, ""},
-		{`"one side only`, `"one side only`},
-	}
-
-	for _, tt := range tests {
-		got := trimQuotes(tt.input)
-		if got != tt.want {
-			t.Errorf("trimQuotes(%q) = %q, want %q", tt.input, got, tt.want)
-		}
-	}
-}
-
-// --- 엣지 케이스: sequence 주석이 없는 파일 ---
-
-func TestParseFileNoSequence(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "empty.go")
-	content := `package service
-
-import "net/http"
-
-// 이 함수에는 sequence 주석이 없다.
-func NoSequence(w http.ResponseWriter, r *http.Request) {}
+// @get Course course = Course.FindByID(request.CourseID)
+func GetCourse(c *gin.Context) {}
 `
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-		t.Fatal(err)
+	sfs := parseTestFile(t, src)
+	if len(sfs) != 1 {
+		t.Fatalf("expected 1 func, got %d", len(sfs))
 	}
-	sf, err := ParseFile(path)
-	if err != nil {
-		t.Fatalf("파싱 실패: %v", err)
+	seq := sfs[0].Sequences[0]
+	assertEqual(t, "Type", seq.Type, SeqGet)
+	assertEqual(t, "Model", seq.Model, "Course.FindByID")
+	if seq.Result == nil {
+		t.Fatal("expected result")
 	}
-	if sf != nil {
-		t.Errorf("sequence 없는 파일인데 ServiceFunc 반환됨: %+v", sf)
+	assertEqual(t, "Result.Type", seq.Result.Type, "Course")
+	assertEqual(t, "Result.Var", seq.Result.Var, "course")
+	if len(seq.Args) != 1 {
+		t.Fatalf("expected 1 arg, got %d", len(seq.Args))
 	}
+	assertEqual(t, "Arg.Source", seq.Args[0].Source, "request")
+	assertEqual(t, "Arg.Field", seq.Args[0].Field, "CourseID")
 }
 
-// --- 엣지 케이스: 잘못된 Go 파일 ---
+func TestParseGetMultiArgs(t *testing.T) {
+	src := `package service
 
-func TestParseFileInvalidGo(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "bad.go")
-	if err := os.WriteFile(path, []byte("not valid go code{{{"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	_, err := ParseFile(path)
-	if err == nil {
-		t.Error("잘못된 Go 파일인데 에러가 없음")
-	}
-}
-
-// --- 엣지 케이스: 존재하지 않는 디렉토리 ---
-
-func TestParseDirNotFound(t *testing.T) {
-	_, err := ParseDir("/nonexistent/path")
-	if err == nil {
-		t.Error("존재하지 않는 디렉토리인데 에러가 없음")
-	}
-}
-
-// --- 엣지 케이스: 빈 디렉토리 ---
-
-func TestParseDirEmpty(t *testing.T) {
-	dir := t.TempDir()
-	funcs, err := ParseDir(dir)
-	if err != nil {
-		t.Fatalf("빈 디렉토리 파싱 실패: %v", err)
-	}
-	if len(funcs) != 0 {
-		t.Errorf("빈 디렉토리인데 함수 반환됨: %d개", len(funcs))
-	}
-}
-
-// --- 엣지 케이스: call @func with package, put 타입 ---
-
-func TestParseCallFuncAndPut(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "login.go")
-	content := `package service
-
-import "net/http"
-
-// @sequence get
-// @model User.FindByEmail
-// @param Email request
-// @result user User
-
-// @sequence guard nil user
-// @message "사용자를 찾을 수 없습니다"
-
-// @sequence call
-// @func auth.verifyPassword
-// @param user.PasswordHash
-// @param Password request
-// @message "비밀번호가 일치하지 않습니다"
-
-// @sequence put
-// @model Session.Update
-// @param SessionID request
-// @param user.ID
-
-// @sequence response json
-// @var user
-func Login(w http.ResponseWriter, r *http.Request) {}
+// @get []Reservation reservations = Reservation.ListByUserAndRoom(currentUser.ID, request.RoomID)
+func ListReservations(c *gin.Context) {}
 `
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-		t.Fatal(err)
+	sfs := parseTestFile(t, src)
+	seq := sfs[0].Sequences[0]
+	assertEqual(t, "Result.Type", seq.Result.Type, "[]Reservation")
+	if len(seq.Args) != 2 {
+		t.Fatalf("expected 2 args, got %d", len(seq.Args))
 	}
-
-	sf, err := ParseFile(path)
-	if err != nil {
-		t.Fatalf("파싱 실패: %v", err)
-	}
-	if sf == nil {
-		t.Fatal("ServiceFunc가 nil")
-	}
-
-	assertStr(t, "Name", sf.Name, "Login")
-	if len(sf.Sequences) != 5 {
-		t.Fatalf("sequence 수: got %d, want 5", len(sf.Sequences))
-	}
-
-	// call @func with package
-	s := sf.Sequences[2]
-	assertStr(t, "call.Type", s.Type, "call")
-	assertStr(t, "call.Package", s.Package, "auth")
-	assertStr(t, "call.Func", s.Func, "verifyPassword")
-	assertStr(t, "call.Message", s.Message, "비밀번호가 일치하지 않습니다")
-	assertParams(t, "call.Params", s.Params, []Param{
-		{Name: "user.PasswordHash"},
-		{Name: "Password", Source: "request"},
-	})
-
-	// put
-	s = sf.Sequences[3]
-	assertStr(t, "put.Type", s.Type, "put")
-	assertStr(t, "put.Model", s.Model, "Session.Update")
-	assertParams(t, "put.Params", s.Params, []Param{
-		{Name: "SessionID", Source: "request"},
-		{Name: "user.ID"},
-	})
-	if s.Result != nil {
-		t.Errorf("put.Result: got %+v, want nil", s.Result)
-	}
-
-	// response
-	s = sf.Sequences[4]
-	assertStr(t, "response.Type", s.Type, "response json")
-	assertStrSlice(t, "response.Vars", s.Vars, []string{"user"})
+	assertEqual(t, "Arg0.Source", seq.Args[0].Source, "currentUser")
+	assertEqual(t, "Arg0.Field", seq.Args[0].Field, "ID")
+	assertEqual(t, "Arg1.Source", seq.Args[1].Source, "request")
+	assertEqual(t, "Arg1.Field", seq.Args[1].Field, "RoomID")
 }
 
-// --- 엣지 케이스: 다수 @var ---
+func TestParsePost(t *testing.T) {
+	src := `package service
 
-func TestParseMultipleVars(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "detail.go")
-	content := `package service
-
-import "net/http"
-
-// @sequence get
-// @model Project.FindByID
-// @param ProjectID request
-// @result project Project
-
-// @sequence get
-// @model Session.ListByProjectID
-// @param ProjectID request
-// @result sessions []Session
-
-// @sequence response json
-// @var project
-// @var sessions
-func GetProjectDetail(w http.ResponseWriter, r *http.Request) {}
+// @post Session session = Session.Create(request.ProjectID, request.Command)
+func CreateSession(c *gin.Context) {}
 `
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-		t.Fatal(err)
+	sfs := parseTestFile(t, src)
+	seq := sfs[0].Sequences[0]
+	assertEqual(t, "Type", seq.Type, SeqPost)
+	assertEqual(t, "Result.Type", seq.Result.Type, "Session")
+	assertEqual(t, "Result.Var", seq.Result.Var, "session")
+	if len(seq.Args) != 2 {
+		t.Fatalf("expected 2 args, got %d", len(seq.Args))
 	}
-
-	sf, err := ParseFile(path)
-	if err != nil {
-		t.Fatalf("파싱 실패: %v", err)
-	}
-
-	s := sf.Sequences[2]
-	assertStr(t, "response.Type", s.Type, "response json")
-	assertStrSlice(t, "response.Vars", s.Vars, []string{"project", "sessions"})
 }
 
-// --- guard state 파싱 ---
+func TestParsePut(t *testing.T) {
+	src := `package service
 
-func TestParseGuardState(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "publish_course.go")
-	content := `package service
-
-import "net/http"
-
-// @sequence get
-// @model Course.FindByID
-// @param CourseID request
-// @result course Course
-
-// @sequence guard nil course
-
-// @sequence guard state course
-// @param course.Published
-
-// @sequence put
-// @model Course.Publish
-// @param CourseID request
-
-// @sequence response json
-func PublishCourse(w http.ResponseWriter, r *http.Request) {}
+// @put Course.Update(request.Title, course.ID)
+func UpdateCourse(c *gin.Context) {}
 `
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-		t.Fatal(err)
+	sfs := parseTestFile(t, src)
+	seq := sfs[0].Sequences[0]
+	assertEqual(t, "Type", seq.Type, SeqPut)
+	assertEqual(t, "Model", seq.Model, "Course.Update")
+	if seq.Result != nil {
+		t.Fatal("expected no result for @put")
 	}
-
-	sf, err := ParseFile(path)
-	if err != nil {
-		t.Fatalf("파싱 실패: %v", err)
+	if len(seq.Args) != 2 {
+		t.Fatalf("expected 2 args, got %d", len(seq.Args))
 	}
-	if sf == nil {
-		t.Fatal("ServiceFunc가 nil")
-	}
-
-	if len(sf.Sequences) != 5 {
-		t.Fatalf("sequence 수: got %d, want 5", len(sf.Sequences))
-	}
-
-	// sequence 2: guard state
-	s := sf.Sequences[2]
-	assertStr(t, "guard state.Type", s.Type, "guard state")
-	assertStr(t, "guard state.Target", s.Target, "course")
-	if len(s.Params) != 1 {
-		t.Fatalf("guard state params: got %d, want 1", len(s.Params))
-	}
-	assertStr(t, "guard state.Params[0].Name", s.Params[0].Name, "course.Published")
+	assertEqual(t, "Arg1.Source", seq.Args[1].Source, "course")
+	assertEqual(t, "Arg1.Field", seq.Args[1].Field, "ID")
 }
 
-// --- 도메인 폴더 재귀 탐색 ---
+func TestParseDelete(t *testing.T) {
+	src := `package service
 
-func TestParseDirRecursive(t *testing.T) {
-	_, file, _, _ := runtime.Caller(0)
-	domainDir := filepath.Join(filepath.Dir(file), "..", "testdata", "domain-service")
-
-	funcs, err := ParseDir(domainDir)
-	if err != nil {
-		t.Fatalf("도메인 디렉토리 파싱 실패: %v", err)
+// @delete Reservation.Cancel(reservation.ID)
+func CancelReservation(c *gin.Context) {}
+`
+	sfs := parseTestFile(t, src)
+	seq := sfs[0].Sequences[0]
+	assertEqual(t, "Type", seq.Type, SeqDelete)
+	if seq.Result != nil {
+		t.Fatal("expected no result for @delete")
 	}
-
-	if len(funcs) != 2 {
-		t.Fatalf("함수 수: got %d, want 2", len(funcs))
-	}
-
-	// WalkDir은 알파벳순이므로 course/create_course.go가 먼저
-	assertStr(t, "funcs[0].Name", funcs[0].Name, "CreateCourse")
-	assertStr(t, "funcs[0].Domain", funcs[0].Domain, "course")
-
-	assertStr(t, "funcs[1].Name", funcs[1].Name, "Login")
-	assertStr(t, "funcs[1].Domain", funcs[1].Domain, "")
 }
 
-// --- import 파싱 ---
+func TestParseLiteralArg(t *testing.T) {
+	src := `package service
 
-func TestParseFileImports(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "login.go")
-	content := `package service
+// @put Reservation.UpdateStatus(request.ReservationID, "cancelled")
+func CancelReservation(c *gin.Context) {}
+`
+	sfs := parseTestFile(t, src)
+	seq := sfs[0].Sequences[0]
+	assertEqual(t, "Arg1.Literal", seq.Args[1].Literal, "cancelled")
+	assertEqual(t, "Arg1.Source", seq.Args[1].Source, "")
+}
+
+func TestParseEmpty(t *testing.T) {
+	src := `package service
+
+// @empty course "코스를 찾을 수 없습니다"
+func GetCourse(c *gin.Context) {}
+`
+	sfs := parseTestFile(t, src)
+	seq := sfs[0].Sequences[0]
+	assertEqual(t, "Type", seq.Type, SeqEmpty)
+	assertEqual(t, "Target", seq.Target, "course")
+	assertEqual(t, "Message", seq.Message, "코스를 찾을 수 없습니다")
+}
+
+func TestParseEmptyMember(t *testing.T) {
+	src := `package service
+
+// @empty course.InstructorID "강사가 지정되지 않았습니다"
+func GetCourse(c *gin.Context) {}
+`
+	sfs := parseTestFile(t, src)
+	seq := sfs[0].Sequences[0]
+	assertEqual(t, "Target", seq.Target, "course.InstructorID")
+}
+
+func TestParseExists(t *testing.T) {
+	src := `package service
+
+// @exists existing "이미 존재합니다"
+func CreateCourse(c *gin.Context) {}
+`
+	sfs := parseTestFile(t, src)
+	seq := sfs[0].Sequences[0]
+	assertEqual(t, "Type", seq.Type, SeqExists)
+	assertEqual(t, "Target", seq.Target, "existing")
+	assertEqual(t, "Message", seq.Message, "이미 존재합니다")
+}
+
+func TestParseState(t *testing.T) {
+	src := `package service
+
+// @state reservation {status: reservation.Status} "cancel" "취소할 수 없습니다"
+func CancelReservation(c *gin.Context) {}
+`
+	sfs := parseTestFile(t, src)
+	seq := sfs[0].Sequences[0]
+	assertEqual(t, "Type", seq.Type, SeqState)
+	assertEqual(t, "DiagramID", seq.DiagramID, "reservation")
+	assertEqual(t, "Transition", seq.Transition, "cancel")
+	assertEqual(t, "Message", seq.Message, "취소할 수 없습니다")
+	if seq.Inputs["status"] != "reservation.Status" {
+		t.Errorf("expected Inputs[status]=%q, got %q", "reservation.Status", seq.Inputs["status"])
+	}
+}
+
+func TestParseStateMultiInputs(t *testing.T) {
+	src := `package service
+
+// @state course {status: course.Status, createdAt: course.CreatedAt} "publish" "발행할 수 없습니다"
+func PublishCourse(c *gin.Context) {}
+`
+	sfs := parseTestFile(t, src)
+	seq := sfs[0].Sequences[0]
+	if len(seq.Inputs) != 2 {
+		t.Fatalf("expected 2 inputs, got %d", len(seq.Inputs))
+	}
+	assertEqual(t, "Inputs[status]", seq.Inputs["status"], "course.Status")
+	assertEqual(t, "Inputs[createdAt]", seq.Inputs["createdAt"], "course.CreatedAt")
+}
+
+func TestParseAuth(t *testing.T) {
+	src := `package service
+
+// @auth "delete" "project" {id: project.ID, owner: project.OwnerID} "권한 없음"
+func DeleteProject(c *gin.Context) {}
+`
+	sfs := parseTestFile(t, src)
+	seq := sfs[0].Sequences[0]
+	assertEqual(t, "Type", seq.Type, SeqAuth)
+	assertEqual(t, "Action", seq.Action, "delete")
+	assertEqual(t, "Resource", seq.Resource, "project")
+	assertEqual(t, "Message", seq.Message, "권한 없음")
+	assertEqual(t, "Inputs[id]", seq.Inputs["id"], "project.ID")
+	assertEqual(t, "Inputs[owner]", seq.Inputs["owner"], "project.OwnerID")
+}
+
+func TestParseAuthEmptyInputs(t *testing.T) {
+	src := `package service
+
+// @auth "view" "dashboard" {} "권한 없음"
+func ViewDashboard(c *gin.Context) {}
+`
+	sfs := parseTestFile(t, src)
+	seq := sfs[0].Sequences[0]
+	assertEqual(t, "Action", seq.Action, "view")
+	if len(seq.Inputs) != 0 {
+		t.Errorf("expected empty inputs, got %d", len(seq.Inputs))
+	}
+}
+
+func TestParseCallWithResult(t *testing.T) {
+	src := `package service
+
+// @call Token token = auth.VerifyPassword(user.Email, request.Password)
+func Login(c *gin.Context) {}
+`
+	sfs := parseTestFile(t, src)
+	seq := sfs[0].Sequences[0]
+	assertEqual(t, "Type", seq.Type, SeqCall)
+	assertEqual(t, "Model", seq.Model, "auth.VerifyPassword")
+	if seq.Result == nil {
+		t.Fatal("expected result")
+	}
+	assertEqual(t, "Result.Type", seq.Result.Type, "Token")
+	assertEqual(t, "Result.Var", seq.Result.Var, "token")
+	if len(seq.Args) != 2 {
+		t.Fatalf("expected 2 args, got %d", len(seq.Args))
+	}
+}
+
+func TestParseCallWithoutResult(t *testing.T) {
+	src := `package service
+
+// @call notification.Send(reservation.ID, "cancelled")
+func CancelReservation(c *gin.Context) {}
+`
+	sfs := parseTestFile(t, src)
+	seq := sfs[0].Sequences[0]
+	assertEqual(t, "Type", seq.Type, SeqCall)
+	assertEqual(t, "Model", seq.Model, "notification.Send")
+	if seq.Result != nil {
+		t.Fatal("expected no result")
+	}
+	assertEqual(t, "Arg1.Literal", seq.Args[1].Literal, "cancelled")
+}
+
+func TestParseResponse(t *testing.T) {
+	src := `package service
+
+// @get Course course = Course.FindByID(request.CourseID)
+// @get User instructor = User.FindByID(course.InstructorID)
+// @response {
+//   course: course,
+//   instructor_name: instructor.Name,
+//   status: "success"
+// }
+func GetCourse(c *gin.Context) {}
+`
+	sfs := parseTestFile(t, src)
+	if len(sfs[0].Sequences) != 3 {
+		t.Fatalf("expected 3 sequences, got %d", len(sfs[0].Sequences))
+	}
+	seq := sfs[0].Sequences[2]
+	assertEqual(t, "Type", seq.Type, SeqResponse)
+	if len(seq.Fields) != 3 {
+		t.Fatalf("expected 3 fields, got %d", len(seq.Fields))
+	}
+	assertEqual(t, "Fields[course]", seq.Fields["course"], "course")
+	assertEqual(t, "Fields[instructor_name]", seq.Fields["instructor_name"], "instructor.Name")
+	assertEqual(t, "Fields[status]", seq.Fields["status"], `"success"`)
+}
+
+func TestParseImports(t *testing.T) {
+	src := `package service
+
+import "myapp/auth"
+
+// @get User user = User.FindByEmail(request.Email)
+func Login(c *gin.Context) {}
+`
+	sfs := parseTestFile(t, src)
+	if len(sfs[0].Imports) != 1 {
+		t.Fatalf("expected 1 import, got %d", len(sfs[0].Imports))
+	}
+	assertEqual(t, "Import", sfs[0].Imports[0], "myapp/auth")
+}
+
+func TestParseImportsExcludeNetHTTP(t *testing.T) {
+	src := `package service
 
 import (
 	"net/http"
-	"github.com/geul-org/fullend/pkg/auth"
+	"myapp/billing"
 )
 
-// @sequence call
-// @func auth.verifyPassword
-// @param user.PasswordHash
-// @param Password request
-// @message "비밀번호가 일치하지 않습니다"
-
-// @sequence response json
-func Login(w http.ResponseWriter, r *http.Request) {}
+// @get User user = User.FindByID(request.UserID)
+func GetUser(c *gin.Context) {}
 `
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	sfs := parseTestFile(t, src)
+	if len(sfs[0].Imports) != 1 {
+		t.Fatalf("expected 1 import, got %d", len(sfs[0].Imports))
+	}
+	assertEqual(t, "Import", sfs[0].Imports[0], "myapp/billing")
+}
+
+func TestParseDomainFolder(t *testing.T) {
+	dir := t.TempDir()
+	authDir := filepath.Join(dir, "auth")
+	os.MkdirAll(authDir, 0755)
+
+	src := `package service
+
+// @get User user = User.FindByEmail(request.Email)
+// @response {
+//   user: user
+// }
+func Login(c *gin.Context) {}
+`
+	os.WriteFile(filepath.Join(authDir, "login.go"), []byte(src), 0644)
+
+	funcs, err := ParseDir(dir)
+	if err != nil {
 		t.Fatal(err)
 	}
-
-	sf, err := ParseFile(path)
-	if err != nil {
-		t.Fatalf("파싱 실패: %v", err)
+	if len(funcs) != 1 {
+		t.Fatalf("expected 1 func, got %d", len(funcs))
 	}
-	if sf == nil {
-		t.Fatal("ServiceFunc가 nil")
-	}
-
-	// net/http는 제외, auth 패키지만 포함
-	if len(sf.Imports) != 1 {
-		t.Fatalf("Imports 수: got %d, want 1, imports: %v", len(sf.Imports), sf.Imports)
-	}
-	assertStr(t, "Imports[0]", sf.Imports[0], "github.com/geul-org/fullend/pkg/auth")
+	assertEqual(t, "Domain", funcs[0].Domain, "auth")
 }
 
-// --- 헬퍼 ---
+func TestParseFullExample(t *testing.T) {
+	src := `package service
 
-func assertStr(t *testing.T, label, got, want string) {
+import "myapp/auth"
+
+// @auth "cancel" "reservation" {id: request.ReservationID} "권한 없음"
+// @get Reservation reservation = Reservation.FindByID(request.ReservationID)
+// @empty reservation "예약을 찾을 수 없습니다"
+// @state reservation {status: reservation.Status} "cancel" "취소할 수 없습니다"
+// @call Refund refund = billing.CalculateRefund(reservation.ID, reservation.StartAt, reservation.EndAt)
+// @put Reservation.UpdateStatus(request.ReservationID, "cancelled")
+// @get Reservation reservation = Reservation.FindByID(request.ReservationID)
+// @response {
+//   reservation: reservation,
+//   refund: refund
+// }
+func CancelReservation(c *gin.Context) {}
+`
+	sfs := parseTestFile(t, src)
+	sf := sfs[0]
+	assertEqual(t, "Name", sf.Name, "CancelReservation")
+
+	if len(sf.Sequences) != 8 {
+		t.Fatalf("expected 8 sequences, got %d", len(sf.Sequences))
+	}
+
+	// @auth
+	assertEqual(t, "seq0.Type", sf.Sequences[0].Type, SeqAuth)
+	assertEqual(t, "seq0.Action", sf.Sequences[0].Action, "cancel")
+
+	// @get
+	assertEqual(t, "seq1.Type", sf.Sequences[1].Type, SeqGet)
+	assertEqual(t, "seq1.Model", sf.Sequences[1].Model, "Reservation.FindByID")
+
+	// @empty
+	assertEqual(t, "seq2.Type", sf.Sequences[2].Type, SeqEmpty)
+
+	// @state
+	assertEqual(t, "seq3.Type", sf.Sequences[3].Type, SeqState)
+	assertEqual(t, "seq3.DiagramID", sf.Sequences[3].DiagramID, "reservation")
+
+	// @call
+	assertEqual(t, "seq4.Type", sf.Sequences[4].Type, SeqCall)
+	assertEqual(t, "seq4.Model", sf.Sequences[4].Model, "billing.CalculateRefund")
+	if seq4r := sf.Sequences[4].Result; seq4r == nil {
+		t.Fatal("expected call result")
+	} else {
+		assertEqual(t, "seq4.Result.Type", seq4r.Type, "Refund")
+	}
+
+	// @put
+	assertEqual(t, "seq5.Type", sf.Sequences[5].Type, SeqPut)
+
+	// @get (re-fetch)
+	assertEqual(t, "seq6.Type", sf.Sequences[6].Type, SeqGet)
+
+	// @response
+	assertEqual(t, "seq7.Type", sf.Sequences[7].Type, SeqResponse)
+	assertEqual(t, "seq7.Fields[reservation]", sf.Sequences[7].Fields["reservation"], "reservation")
+	assertEqual(t, "seq7.Fields[refund]", sf.Sequences[7].Fields["refund"], "refund")
+}
+
+func TestParseMultipleFuncs(t *testing.T) {
+	src := `package service
+
+// @get Course course = Course.FindByID(request.CourseID)
+// @response {
+//   course: course
+// }
+func GetCourse(c *gin.Context) {}
+
+// @post Course course = Course.Create(request.Title)
+// @response {
+//   course: course
+// }
+func CreateCourse(c *gin.Context) {}
+`
+	sfs := parseTestFile(t, src)
+	if len(sfs) != 2 {
+		t.Fatalf("expected 2 funcs, got %d", len(sfs))
+	}
+	assertEqual(t, "Func0", sfs[0].Name, "GetCourse")
+	assertEqual(t, "Func1", sfs[1].Name, "CreateCourse")
+}
+
+// --- helpers ---
+
+func parseTestFile(t *testing.T, src string) []ServiceFunc {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.go")
+	if err := os.WriteFile(path, []byte(src), 0644); err != nil {
+		t.Fatal(err)
+	}
+	sfs, err := ParseFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sfs) == 0 {
+		t.Fatal("expected at least 1 ServiceFunc")
+	}
+	return sfs
+}
+
+func assertEqual(t *testing.T, name, got, want string) {
 	t.Helper()
 	if got != want {
-		t.Errorf("%s: got %q, want %q", label, got, want)
-	}
-}
-
-func assertStrSlice(t *testing.T, label string, got, want []string) {
-	t.Helper()
-	if len(got) != len(want) {
-		t.Errorf("%s: len got %d, want %d", label, len(got), len(want))
-		return
-	}
-	for i := range got {
-		if got[i] != want[i] {
-			t.Errorf("%s[%d]: got %q, want %q", label, i, got[i], want[i])
-		}
-	}
-}
-
-func assertParams(t *testing.T, label string, got, want []Param) {
-	t.Helper()
-	if len(got) != len(want) {
-		t.Errorf("%s: len got %d, want %d", label, len(got), len(want))
-		return
-	}
-	for i := range got {
-		if got[i].Name != want[i].Name {
-			t.Errorf("%s[%d].Name: got %q, want %q", label, i, got[i].Name, want[i].Name)
-		}
-		if got[i].Source != want[i].Source {
-			t.Errorf("%s[%d].Source: got %q, want %q", label, i, got[i].Source, want[i].Source)
-		}
-	}
-}
-
-func assertResult(t *testing.T, label string, got *Result, wantVar, wantType string) {
-	t.Helper()
-	if got == nil {
-		t.Errorf("%s: got nil", label)
-		return
-	}
-	if got.Var != wantVar {
-		t.Errorf("%s.Var: got %q, want %q", label, got.Var, wantVar)
-	}
-	if got.Type != wantType {
-		t.Errorf("%s.Type: got %q, want %q", label, got.Type, wantType)
+		t.Errorf("%s: got %q, want %q", name, got, want)
 	}
 }
