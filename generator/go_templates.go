@@ -92,4 +92,8 @@ var goTemplates = template.Must(template.New("").Parse(`
 		{{- end}}
 	})
 {{end}}
+
+{{- define "response_direct" -}}
+	c.JSON(http.StatusOK, {{.Target}})
+{{end}}
 `))

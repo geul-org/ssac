@@ -60,7 +60,10 @@ func ParseFile(path string) ([]ServiceFunc, error) {
 			}
 		}
 
-		sequences := parseComments(comments)
+		sequences, err := parseComments(comments)
+		if err != nil {
+			return nil, fmt.Errorf("%s:%s — %w", filepath.Base(path), fn.Name.Name, err)
+		}
 		if len(sequences) == 0 {
 			continue
 		}
@@ -77,7 +80,7 @@ func ParseFile(path string) ([]ServiceFunc, error) {
 }
 
 // parseComments는 주석 리스트에서 v2 시퀀스를 추출한다.
-func parseComments(comments []*ast.Comment) []Sequence {
+func parseComments(comments []*ast.Comment) ([]Sequence, error) {
 	var sequences []Sequence
 	var responseLines []string
 	inResponse := false
@@ -107,7 +110,10 @@ func parseComments(comments []*ast.Comment) []Sequence {
 			continue
 		}
 
-		seq, isResponseStart := parseLine(line)
+		seq, isResponseStart, err := parseLine(line)
+		if err != nil {
+			return nil, err
+		}
 		if isResponseStart {
 			inResponse = true
 			responseSuppressWarn = strings.HasPrefix(line, "@response!")
@@ -118,20 +124,30 @@ func parseComments(comments []*ast.Comment) []Sequence {
 			sequences = append(sequences, *seq)
 		}
 	}
-	return sequences
+	return sequences, nil
 }
 
 // parseLine은 한 줄을 파싱하여 Sequence를 반환한다.
-// @response { 의 경우 (nil, true)를 반환하여 멀티라인 모드 시작을 알린다.
-func parseLine(line string) (*Sequence, bool) {
+// @response { 의 경우 (nil, true, nil)를 반환하여 멀티라인 모드 시작을 알린다.
+func parseLine(line string) (*Sequence, bool, error) {
 	if strings.HasPrefix(line, "@response") {
 		tag := "@response"
+		suppressWarn := false
 		if strings.HasPrefix(line, "@response!") {
 			tag = "@response!"
+			suppressWarn = true
 		}
 		trimmed := strings.TrimSpace(strings.TrimPrefix(line, tag))
 		if trimmed == "{" {
-			return nil, true
+			return nil, true, nil
+		}
+		// @response 간단쓰기: @response varName
+		if trimmed != "" && trimmed != "{" {
+			return &Sequence{
+				Type:         SeqResponse,
+				Target:       trimmed,
+				SuppressWarn: suppressWarn,
+			}, false, nil
 		}
 	}
 
@@ -146,39 +162,43 @@ func parseLine(line string) (*Sequence, bool) {
 	}
 
 	var seq *Sequence
+	var err error
 	switch {
 	case strings.HasPrefix(line, "@get "):
-		seq = parseCRUD(SeqGet, line[5:], true)
+		seq, err = parseCRUD(SeqGet, line[5:], true)
 	case strings.HasPrefix(line, "@post "):
-		seq = parseCRUD(SeqPost, line[6:], true)
+		seq, err = parseCRUD(SeqPost, line[6:], true)
 	case strings.HasPrefix(line, "@put "):
-		seq = parseCRUD(SeqPut, line[5:], false)
+		seq, err = parseCRUD(SeqPut, line[5:], false)
 	case strings.HasPrefix(line, "@delete "):
-		seq = parseCRUD(SeqDelete, line[8:], false)
+		seq, err = parseCRUD(SeqDelete, line[8:], false)
 	case strings.HasPrefix(line, "@empty "):
 		seq = parseGuard(SeqEmpty, line[7:])
 	case strings.HasPrefix(line, "@exists "):
 		seq = parseGuard(SeqExists, line[8:])
 	case strings.HasPrefix(line, "@state "):
-		seq = parseState(line[7:])
+		seq, err = parseState(line[7:])
 	case strings.HasPrefix(line, "@auth "):
-		seq = parseAuth(line[6:])
+		seq, err = parseAuth(line[6:])
 	case strings.HasPrefix(line, "@call "):
-		seq = parseCall(line[6:])
+		seq, err = parseCall(line[6:])
 	default:
-		return nil, false
+		return nil, false, nil
 	}
 
+	if err != nil {
+		return nil, false, err
+	}
 	if seq != nil && suppressWarn {
 		seq.SuppressWarn = true
 	}
-	return seq, false
+	return seq, false, nil
 }
 
 // parseCRUD는 @get/@post/@put/@delete를 파싱한다.
 // hasResult=true: Type var = Model.Method({Key: val, ...})
 // hasResult=false: Model.Method({Key: val, ...})
-func parseCRUD(seqType, rest string, hasResult bool) *Sequence {
+func parseCRUD(seqType, rest string, hasResult bool) (*Sequence, error) {
 	rest = strings.TrimSpace(rest)
 	seq := &Sequence{Type: seqType}
 
@@ -186,28 +206,34 @@ func parseCRUD(seqType, rest string, hasResult bool) *Sequence {
 		// Type var = Model.Method({Key: val, ...})
 		eqIdx := strings.Index(rest, "=")
 		if eqIdx < 0 {
-			return nil
+			return nil, nil
 		}
 		lhs := strings.TrimSpace(rest[:eqIdx])
 		rhs := strings.TrimSpace(rest[eqIdx+1:])
 
 		result := parseResult(lhs)
 		if result == nil {
-			return nil
+			return nil, nil
 		}
 		seq.Result = result
 
-		model, inputs := parseCallExprInputs(rhs)
+		model, inputs, err := parseCallExprInputs(rhs)
+		if err != nil {
+			return nil, err
+		}
 		seq.Model = model
 		seq.Inputs = inputs
 	} else {
 		// Model.Method({Key: val, ...})
-		model, inputs := parseCallExprInputs(rest)
+		model, inputs, err := parseCallExprInputs(rest)
+		if err != nil {
+			return nil, err
+		}
 		seq.Model = model
 		seq.Inputs = inputs
 	}
 
-	return seq
+	return seq, nil
 }
 
 // parseGuard는 @empty/@exists를 파싱한다.
@@ -224,19 +250,22 @@ func parseGuard(seqType, rest string) *Sequence {
 
 // parseState는 @state를 파싱한다.
 // diagramID {inputs} "transition" "message"
-func parseState(rest string) *Sequence {
+func parseState(rest string) (*Sequence, error) {
 	rest = strings.TrimSpace(rest)
 
 	// diagramID
 	spaceIdx := strings.IndexByte(rest, ' ')
 	if spaceIdx < 0 {
-		return nil
+		return nil, nil
 	}
 	diagramID := rest[:spaceIdx]
 	rest = strings.TrimSpace(rest[spaceIdx+1:])
 
 	// {inputs}
-	inputs, rest := extractInputs(rest)
+	inputs, rest, err := extractInputs(rest)
+	if err != nil {
+		return nil, err
+	}
 
 	// "transition" "message"
 	transition, msg := parseTwoQuoted(rest)
@@ -247,12 +276,12 @@ func parseState(rest string) *Sequence {
 		Inputs:     inputs,
 		Transition: transition,
 		Message:    msg,
-	}
+	}, nil
 }
 
 // parseAuth는 @auth를 파싱한다.
 // "action" "resource" {inputs} "message"
-func parseAuth(rest string) *Sequence {
+func parseAuth(rest string) (*Sequence, error) {
 	rest = strings.TrimSpace(rest)
 
 	// "action"
@@ -264,7 +293,10 @@ func parseAuth(rest string) *Sequence {
 	rest = strings.TrimSpace(rest)
 
 	// {inputs}
-	inputs, rest := extractInputs(rest)
+	inputs, rest, err := extractInputs(rest)
+	if err != nil {
+		return nil, err
+	}
 
 	// "message"
 	msg, _ := extractQuoted(strings.TrimSpace(rest))
@@ -275,12 +307,12 @@ func parseAuth(rest string) *Sequence {
 		Resource: resource,
 		Inputs:   inputs,
 		Message:  msg,
-	}
+	}, nil
 }
 
 // parseCall은 @call을 파싱한다.
 // Type var = pkg.Func({Key: val, ...}) 또는 pkg.Func({Key: val, ...})
-func parseCall(rest string) *Sequence {
+func parseCall(rest string) (*Sequence, error) {
 	rest = strings.TrimSpace(rest)
 	seq := &Sequence{Type: SeqCall}
 
@@ -293,37 +325,44 @@ func parseCall(rest string) *Sequence {
 
 		result := parseResult(lhs)
 		if result == nil {
-			return nil
+			return nil, nil
 		}
 		seq.Result = result
 
-		model, inputs := parseCallExprInputs(rhs)
+		model, inputs, err := parseCallExprInputs(rhs)
+		if err != nil {
+			return nil, err
+		}
 		seq.Model = model
 		seq.Inputs = inputs
 	} else {
-		model, inputs := parseCallExprInputs(rest)
+		model, inputs, err := parseCallExprInputs(rest)
+		if err != nil {
+			return nil, err
+		}
 		seq.Model = model
 		seq.Inputs = inputs
 	}
 
-	return seq
+	return seq, nil
 }
 
 // parseCallExprInputs는 "pkg.Func({Key: val, ...})"를 파싱한다.
-func parseCallExprInputs(expr string) (string, map[string]string) {
+func parseCallExprInputs(expr string) (string, map[string]string, error) {
 	expr = strings.TrimSpace(expr)
 	parenIdx := strings.Index(expr, "(")
 	if parenIdx < 0 {
-		return expr, nil
+		return expr, nil, nil
 	}
 	model := expr[:parenIdx]
 	inner := expr[parenIdx+1:]
 	inner = strings.TrimSuffix(strings.TrimSpace(inner), ")")
 	inner = strings.TrimSpace(inner)
 	if inner == "" {
-		return model, nil
+		return model, nil, nil
 	}
-	return model, parseInputs(inner)
+	inputs, err := parseInputs(inner)
+	return model, inputs, err
 }
 
 // parseResult는 "Type var" 또는 "[]Type var"를 파싱한다.
@@ -333,10 +372,21 @@ func parseResult(lhs string) *Result {
 	if len(parts) != 2 {
 		return nil
 	}
-	return &Result{
-		Type: parts[0],
-		Var:  parts[1],
+	typeName := parts[0]
+	r := &Result{Var: parts[1]}
+
+	// Page[Gig] → Wrapper="Page", Type="Gig"
+	// Cursor[Gig] → Wrapper="Cursor", Type="Gig"
+	if bracketIdx := strings.IndexByte(typeName, '['); bracketIdx > 0 {
+		if strings.HasSuffix(typeName, "]") {
+			r.Wrapper = typeName[:bracketIdx]
+			r.Type = typeName[bracketIdx+1 : len(typeName)-1]
+			return r
+		}
 	}
+
+	r.Type = typeName
+	return r
 }
 
 // parseCallExpr는 "Model.Method(args)" 또는 "pkg.Func(args)"를 파싱한다.
@@ -406,20 +456,23 @@ func parseResponseFields(lines []string) map[string]string {
 }
 
 // parseInputs는 {key: value, ...} 형식을 파싱한다.
-func parseInputs(s string) map[string]string {
+func parseInputs(s string) (map[string]string, error) {
 	s = strings.TrimSpace(s)
 	s = strings.TrimPrefix(s, "{")
 	s = strings.TrimSuffix(s, "}")
 	s = strings.TrimSpace(s)
 	if s == "" {
-		return map[string]string{}
+		return map[string]string{}, nil
 	}
 	result := make(map[string]string)
 	for _, pair := range strings.Split(s, ",") {
 		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
 		colonIdx := strings.IndexByte(pair, ':')
 		if colonIdx < 0 {
-			continue
+			return nil, fmt.Errorf("%q는 유효하지 않은 입력 형식입니다. \"{Key: value}\" 형식을 사용하세요", pair)
 		}
 		key := strings.TrimSpace(pair[:colonIdx])
 		val := strings.TrimSpace(pair[colonIdx+1:])
@@ -427,22 +480,23 @@ func parseInputs(s string) map[string]string {
 			result[key] = val
 		}
 	}
-	return result
+	return result, nil
 }
 
 // extractInputs는 문자열에서 {…} 블록을 추출하고 나머지를 반환한다.
-func extractInputs(s string) (map[string]string, string) {
+func extractInputs(s string) (map[string]string, string, error) {
 	openIdx := strings.IndexByte(s, '{')
 	if openIdx < 0 {
-		return map[string]string{}, s
+		return map[string]string{}, s, nil
 	}
 	closeIdx := strings.IndexByte(s, '}')
 	if closeIdx < 0 {
-		return map[string]string{}, s
+		return map[string]string{}, s, nil
 	}
 	inputStr := s[openIdx : closeIdx+1]
 	rest := strings.TrimSpace(s[closeIdx+1:])
-	return parseInputs(inputStr), rest
+	inputs, err := parseInputs(inputStr)
+	return inputs, rest, err
 }
 
 // extractQuoted는 문자열 앞의 "quoted" 값을 추출하고 나머지를 반환한다.

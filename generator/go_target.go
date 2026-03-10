@@ -219,8 +219,8 @@ func buildTemplateData(seq parser.Sequence, errDeclared *bool, declaredVars map[
 		d.ArgsCode = buildArgsCode(seq.Args)
 	}
 
-	// query arg → HasTotal (List + query → 3-tuple return)
-	if hasQueryInput(seq.Inputs) && seq.Result != nil && strings.HasPrefix(seq.Result.Type, "[]") {
+	// query arg → HasTotal (List + query → 3-tuple return), Wrapper 타입이면 제외
+	if hasQueryInput(seq.Inputs) && seq.Result != nil && strings.HasPrefix(seq.Result.Type, "[]") && seq.Result.Wrapper == "" {
 		d.HasTotal = true
 	}
 
@@ -287,6 +287,11 @@ func buildTemplateData(seq parser.Sequence, errDeclared *bool, declaredVars map[
 
 func templateName(seq parser.Sequence) string {
 	switch seq.Type {
+	case parser.SeqResponse:
+		if seq.Target != "" {
+			return "response_direct"
+		}
+		return "response"
 	case parser.SeqCall:
 		if seq.Result != nil {
 			return "call_with_result"
@@ -571,6 +576,9 @@ func collectImports(sf parser.ServiceFunc, reqParams []typedRequestParam, pathPa
 		if seq.Type == parser.SeqAuth {
 			seen["authz"] = true
 		}
+		if seq.Result != nil && seq.Result.Wrapper != "" {
+			seen["github.com/geul-org/fullend/pkg/pagination"] = true
+		}
 	}
 
 	for _, tp := range reqParams {
@@ -661,6 +669,10 @@ func getPathParams(funcName string, st *validator.SymbolTable) []validator.PathP
 func generateQueryOptsCode(st *validator.SymbolTable) string {
 	var buf bytes.Buffer
 	buf.WriteString("\topts := QueryOpts{}\n")
+
+	if st == nil {
+		return buf.String()
+	}
 
 	hasPagination := false
 	hasSort := false
@@ -1003,6 +1015,11 @@ func resolveInputParamType(val string, modelName string, st *validator.SymbolTab
 }
 
 func deriveReturnType(mi validator.MethodInfo, usage modelUsage, hasQueryOpts bool) string {
+	// Wrapper 타입 (Page[T], Cursor[T])
+	if usage.Result != nil && usage.Result.Wrapper != "" {
+		return fmt.Sprintf("(*pagination.%s[%s], error)", usage.Result.Wrapper, usage.Result.Type)
+	}
+
 	switch mi.Cardinality {
 	case "exec":
 		return "error"
@@ -1031,8 +1048,17 @@ func renderInterfaces(interfaces []derivedInterface, needQueryOpts bool) []byte 
 	var buf bytes.Buffer
 	buf.WriteString("package model\n\n")
 
-	if needsTimeImport(interfaces) {
-		buf.WriteString("import \"time\"\n\n")
+	needTime := needsTimeImport(interfaces)
+	needPagination := needsPaginationImport(interfaces)
+	if needTime || needPagination {
+		buf.WriteString("import (\n")
+		if needTime {
+			buf.WriteString("\t\"time\"\n")
+		}
+		if needPagination {
+			buf.WriteString("\t\"github.com/geul-org/fullend/pkg/pagination\"\n")
+		}
+		buf.WriteString(")\n\n")
 	}
 
 	for _, iface := range interfaces {
@@ -1080,6 +1106,17 @@ func hasQueryOpts(st *validator.SymbolTable) bool {
 	for _, op := range st.Operations {
 		if op.HasQueryOpts() {
 			return true
+		}
+	}
+	return false
+}
+
+func needsPaginationImport(interfaces []derivedInterface) bool {
+	for _, iface := range interfaces {
+		for _, m := range iface.Methods {
+			if strings.Contains(m.ReturnType, "pagination.") {
+				return true
+			}
 		}
 	}
 	return false

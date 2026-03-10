@@ -450,6 +450,71 @@ func TestGenerateModelInterfaceQueryOptsExplicit(t *testing.T) {
 	assertContains(t, data, "FindByID(id int64)")
 }
 
+func TestGenerateResponseDirect(t *testing.T) {
+	sf := parser.ServiceFunc{
+		Name: "ListGigs", FileName: "list_gigs.go",
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqGet, Model: "Gig.List", Inputs: map[string]string{"Query": "query"}, Result: &parser.Result{Type: "Gig", Var: "gigPage", Wrapper: "Page"}},
+			{Type: parser.SeqResponse, Target: "gigPage"},
+		},
+	}
+	code := mustGenerate(t, sf, nil)
+	assertContains(t, code, `c.JSON(http.StatusOK, gigPage)`)
+	assertNotContains(t, code, `c.JSON(http.StatusOK, gin.H`)
+}
+
+func TestGeneratePageReturnType(t *testing.T) {
+	st := &validator.SymbolTable{
+		Models: map[string]validator.ModelSymbol{
+			"Gig": {Methods: map[string]validator.MethodInfo{
+				"List": {Cardinality: "many"},
+			}},
+		},
+		DDLTables:  map[string]validator.DDLTable{},
+		Operations: map[string]validator.OperationSymbol{},
+	}
+	funcs := []parser.ServiceFunc{{
+		Name: "ListGigs", FileName: "list_gigs.go",
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqGet, Model: "Gig.List", Inputs: map[string]string{"Query": "query"}, Result: &parser.Result{Type: "Gig", Var: "gigPage", Wrapper: "Page"}},
+			{Type: parser.SeqResponse, Target: "gigPage"},
+		},
+	}}
+
+	outDir := t.TempDir()
+	if err := GenerateModelInterfaces(funcs, st, outDir); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := readFile(t, outDir+"/model/models_gen.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertContains(t, data, "(*pagination.Page[Gig], error)")
+	assertContains(t, data, "pagination")
+}
+
+func TestGeneratePageNoHasTotal(t *testing.T) {
+	st := &validator.SymbolTable{
+		Models:     map[string]validator.ModelSymbol{},
+		DDLTables:  map[string]validator.DDLTable{},
+		Operations: map[string]validator.OperationSymbol{
+			"ListGigs": {XPagination: &validator.XPagination{Style: "offset", DefaultLimit: 20, MaxLimit: 100}},
+		},
+	}
+	sf := parser.ServiceFunc{
+		Name: "ListGigs", FileName: "list_gigs.go",
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqGet, Model: "Gig.List", Inputs: map[string]string{"Query": "query"}, Result: &parser.Result{Type: "Gig", Var: "gigPage", Wrapper: "Page"}},
+			{Type: parser.SeqResponse, Target: "gigPage"},
+		},
+	}
+	code := mustGenerate(t, sf, st)
+	// Page[T]이면 3-tuple 아니라 단일 반환
+	assertNotContains(t, code, "total")
+	assertContains(t, code, `gigPage, err :=`)
+}
+
 // --- helpers ---
 
 func mustGenerate(t *testing.T, sf parser.ServiceFunc, st *validator.SymbolTable) string {

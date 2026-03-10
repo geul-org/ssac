@@ -510,6 +510,81 @@ func GetCourse() {}
 	}
 }
 
+func TestParseInputsNoColon(t *testing.T) {
+	src := `package service
+
+// @get []Gig gigs = Gig.List({query})
+func ListGigs(c *gin.Context) {}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.go")
+	if err := os.WriteFile(path, []byte(src), 0644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ParseFile(path)
+	if err == nil {
+		t.Fatal("expected error for input without colon")
+	}
+	if !strings.Contains(err.Error(), "유효하지 않은 입력 형식") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestParsePageType(t *testing.T) {
+	src := `package service
+
+// @get Page[Gig] gigPage = Gig.List({Query: query})
+func ListGigs(c *gin.Context) {}
+`
+	sfs := parseTestFile(t, src)
+	seq := sfs[0].Sequences[0]
+	if seq.Result == nil {
+		t.Fatal("expected result")
+	}
+	assertEqual(t, "Result.Wrapper", seq.Result.Wrapper, "Page")
+	assertEqual(t, "Result.Type", seq.Result.Type, "Gig")
+	assertEqual(t, "Result.Var", seq.Result.Var, "gigPage")
+}
+
+func TestParseCursorType(t *testing.T) {
+	src := `package service
+
+// @get Cursor[Gig] gigCursor = Gig.List({Query: query})
+func ListGigs(c *gin.Context) {}
+`
+	sfs := parseTestFile(t, src)
+	seq := sfs[0].Sequences[0]
+	if seq.Result == nil {
+		t.Fatal("expected result")
+	}
+	assertEqual(t, "Result.Wrapper", seq.Result.Wrapper, "Cursor")
+	assertEqual(t, "Result.Type", seq.Result.Type, "Gig")
+}
+
+func TestParseResponseDirect(t *testing.T) {
+	src := `package service
+
+// @get Page[Gig] gigPage = Gig.List({Query: query})
+// @response gigPage
+func ListGigs(c *gin.Context) {}
+`
+	sfs := parseTestFile(t, src)
+	var resp *Sequence
+	for i := range sfs[0].Sequences {
+		if sfs[0].Sequences[i].Type == SeqResponse {
+			resp = &sfs[0].Sequences[i]
+			break
+		}
+	}
+	if resp == nil {
+		t.Fatal("expected response sequence")
+	}
+	assertEqual(t, "Target", resp.Target, "gigPage")
+	if len(resp.Fields) != 0 {
+		t.Errorf("expected empty Fields for direct response, got %v", resp.Fields)
+	}
+}
+
 // --- helpers ---
 
 func parseTestFile(t *testing.T, src string) []ServiceFunc {

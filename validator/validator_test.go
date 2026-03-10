@@ -606,6 +606,19 @@ func TestValidateQueryUsageMatch(t *testing.T) {
 
 // --- helpers ---
 
+func assertNoErrors(t *testing.T, errs []ValidationError) {
+	t.Helper()
+	var errors []ValidationError
+	for _, e := range errs {
+		if e.Level != "WARNING" {
+			errors = append(errors, e)
+		}
+	}
+	if len(errors) > 0 {
+		t.Errorf("expected no errors, got %d: %v", len(errors), errors)
+	}
+}
+
 func assertHasError(t *testing.T, errs []ValidationError, substr string) {
 	t.Helper()
 	for _, e := range errs {
@@ -637,4 +650,82 @@ func searchSubstr(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// --- 외부 검증: pagination type ---
+
+func TestValidatePaginationOffsetWithPage(t *testing.T) {
+	st := &SymbolTable{
+		Models:     map[string]ModelSymbol{"Gig": {Methods: map[string]MethodInfo{"List": {Cardinality: "many"}}}},
+		DDLTables:  map[string]DDLTable{},
+		Operations: map[string]OperationSymbol{
+			"ListGigs": {XPagination: &XPagination{Style: "offset"}},
+		},
+	}
+	funcs := []parser.ServiceFunc{{
+		Name: "ListGigs", FileName: "list_gigs.go",
+		Sequences: []parser.Sequence{{
+			Type: parser.SeqGet, Model: "Gig.List",
+			Result: &parser.Result{Type: "Gig", Var: "gigPage", Wrapper: "Page"},
+		}},
+	}}
+	errs := ValidateWithSymbols(funcs, st)
+	assertNoErrors(t, errs)
+}
+
+func TestValidatePaginationOffsetWithSlice(t *testing.T) {
+	st := &SymbolTable{
+		Models:     map[string]ModelSymbol{"Gig": {Methods: map[string]MethodInfo{"List": {Cardinality: "many"}}}},
+		DDLTables:  map[string]DDLTable{},
+		Operations: map[string]OperationSymbol{
+			"ListGigs": {XPagination: &XPagination{Style: "offset"}},
+		},
+	}
+	funcs := []parser.ServiceFunc{{
+		Name: "ListGigs", FileName: "list_gigs.go",
+		Sequences: []parser.Sequence{{
+			Type: parser.SeqGet, Model: "Gig.List",
+			Result: &parser.Result{Type: "[]Gig", Var: "gigs"},
+		}},
+	}}
+	errs := ValidateWithSymbols(funcs, st)
+	assertHasError(t, errs, "Page[T]가 아닙니다")
+}
+
+func TestValidatePaginationCursorMismatch(t *testing.T) {
+	st := &SymbolTable{
+		Models:     map[string]ModelSymbol{"Gig": {Methods: map[string]MethodInfo{"List": {Cardinality: "many"}}}},
+		DDLTables:  map[string]DDLTable{},
+		Operations: map[string]OperationSymbol{
+			"ListGigs": {XPagination: &XPagination{Style: "cursor"}},
+		},
+	}
+	funcs := []parser.ServiceFunc{{
+		Name: "ListGigs", FileName: "list_gigs.go",
+		Sequences: []parser.Sequence{{
+			Type: parser.SeqGet, Model: "Gig.List",
+			Result: &parser.Result{Type: "Gig", Var: "gigPage", Wrapper: "Page"},
+		}},
+	}}
+	errs := ValidateWithSymbols(funcs, st)
+	assertHasError(t, errs, "Cursor[T]가 아닙니다")
+}
+
+func TestValidateNoPaginationWithWrapper(t *testing.T) {
+	st := &SymbolTable{
+		Models:     map[string]ModelSymbol{"Gig": {Methods: map[string]MethodInfo{"List": {Cardinality: "many"}}}},
+		DDLTables:  map[string]DDLTable{},
+		Operations: map[string]OperationSymbol{
+			"ListGigs": {},
+		},
+	}
+	funcs := []parser.ServiceFunc{{
+		Name: "ListGigs", FileName: "list_gigs.go",
+		Sequences: []parser.Sequence{{
+			Type: parser.SeqGet, Model: "Gig.List",
+			Result: &parser.Result{Type: "Gig", Var: "gigPage", Wrapper: "Page"},
+		}},
+	}}
+	errs := ValidateWithSymbols(funcs, st)
+	assertHasError(t, errs, "x-pagination이 없지만")
 }
