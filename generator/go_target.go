@@ -316,6 +316,9 @@ func argToCode(a parser.Arg) string {
 		return a.Source + "." + a.Field
 	}
 	if a.Source != "" {
+		if a.Field == "" {
+			return a.Source
+		}
 		return a.Source + "." + a.Field
 	}
 	return a.Field
@@ -345,14 +348,27 @@ func inputValueToCode(val string) string {
 	return val
 }
 
-// buildCallInputFields는 @call의 Args를 위치 기반 초기화(unkeyed literal)로 변환한다.
-// 외부 패키지의 Request 구조체 필드명을 알 수 없으므로 위치 기반으로 매핑한다.
+// buildCallInputFields는 @call의 Args를 named field 형식으로 변환한다.
+// 필드명은 arg의 Field(있으면) 또는 ucFirst(Source)(bare variable)에서 도출한다.
 func buildCallInputFields(args []parser.Arg) string {
 	var fields []string
 	for _, a := range args {
-		fields = append(fields, argToCode(a))
+		name := callFieldName(a)
+		value := argToCode(a)
+		fields = append(fields, name+": "+value)
 	}
 	return strings.Join(fields, ", ")
+}
+
+// callFieldName은 @call arg에서 Request struct 필드명을 도출한다.
+func callFieldName(a parser.Arg) string {
+	if a.Literal != "" {
+		return ucFirst(a.Literal)
+	}
+	if a.Field != "" {
+		return a.Field
+	}
+	return ucFirst(a.Source)
 }
 
 // --- request parameter extraction ---

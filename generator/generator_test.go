@@ -128,7 +128,7 @@ func TestGenerateCallWithResult(t *testing.T) {
 	}
 	code := mustGenerate(t, sf, nil)
 	assertContains(t, code, `auth.VerifyPassword(auth.VerifyPasswordRequest{`)
-	assertContains(t, code, `user.Email, password`)
+	assertContains(t, code, `Email: user.Email, Password: password`)
 	assertContains(t, code, `http.StatusInternalServerError`)
 }
 
@@ -141,9 +141,27 @@ func TestGenerateCallWithoutResult(t *testing.T) {
 	}
 	code := mustGenerate(t, sf, nil)
 	assertContains(t, code, `notification.Send(notification.SendRequest{`)
-	assertContains(t, code, `reservation.ID, "cancelled"`)
+	assertContains(t, code, `ID: reservation.ID, Cancelled: "cancelled"`)
 	assertContains(t, code, `_, err :=`)
 	assertContains(t, code, `http.StatusUnauthorized`)
+}
+
+func TestGenerateCallBareVariable(t *testing.T) {
+	sf := parser.ServiceFunc{
+		Name: "Register", FileName: "register.go",
+		Imports: []string{"myapp/auth"},
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqCall, Model: "auth.HashPassword", Args: []parser.Arg{{Source: "request", Field: "Password"}}, Result: &parser.Result{Type: "string", Var: "hashedPassword"}},
+			{Type: parser.SeqPost, Model: "User.Create", Args: []parser.Arg{{Source: "request", Field: "Email"}, {Source: "hashedPassword"}, {Source: "request", Field: "Role"}}, Result: &parser.Result{Type: "User", Var: "user"}},
+			{Type: parser.SeqResponse, Fields: map[string]string{"user": "user"}},
+		},
+	}
+	code := mustGenerate(t, sf, nil)
+	// @call named field
+	assertContains(t, code, `auth.HashPassword(auth.HashPasswordRequest{Password: password})`)
+	// bare variable: no trailing dot
+	assertContains(t, code, `userModel.Create(email, hashedPassword, role)`)
+	assertNotContains(t, code, `hashedPassword.`)
 }
 
 func TestGenerateResponse(t *testing.T) {
