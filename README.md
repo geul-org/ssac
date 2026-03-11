@@ -5,8 +5,8 @@ Service logic is a series of decisions: which model to query, what to guard agai
 SSaC preserves those decisions as a declarative spec. You declare **what** happens and **in what order**. The tool generates the implementation.
 
 ```
-specs/service/<domain>/*.go  →  ssac validate  →  ssac gen  →  artifacts/<domain>/*.go
-       (comment DSL)              (validation)      (codegen)     (gofmt applied)
+specs/service/<domain>/*.ssac  →  ssac validate  →  ssac gen  →  artifacts/<domain>/*.go
+        (comment DSL)                (validation)      (codegen)     (gofmt applied)
 ```
 
 ## Core Idea
@@ -142,7 +142,7 @@ When external SSOT (symbol table) is available, `ssac gen` adds:
 - **@state codegen**: `err := {id}state.CanTransition({id}state.Input{...}, "transition")` (returns error, not bool)
 - **@auth codegen**: `authz.Check(currentUser, "action", "resource", authz.Input{...})`
 - **Spec file imports**: Go import declarations in spec files are passed to generated code
-- **Package prefix model**: `pkg.Model.Method({...})` — non-DDL models validated against Go interface. Missing interface → WARNING, missing method → ERROR with available methods. Excluded from `models_gen.go`
+- **Package prefix model**: `pkg.Model.Method({...})` — non-DDL models validated against Go interface. Missing interface → WARNING, missing method → ERROR with available methods. Parameter matching: SSaC keys ↔ interface params (`context.Context` excluded). Excluded from `models_gen.go`
 
 ## OpenAPI x- Extensions
 
@@ -193,7 +193,7 @@ files/                           # Design documents
 
 ```
 <project>/
-  service/<domain>/*.go   # Sequence specs (domain subfolder required, flat is ERROR)
+  service/<domain>/*.ssac  # Sequence specs (domain subfolder required, flat is ERROR)
   db/*.sql                # DDL (CREATE TABLE → column types, FK, indexes)
   db/queries/*.sql        # sqlc queries (-- name: Method :cardinality)
   api/openapi.yaml        # OpenAPI 3.0 (operationId = function name, x-extensions)
@@ -206,7 +206,7 @@ files/                           # Design documents
 go test ./parser/... ./validator/... ./generator/... -count=1
 ```
 
-115 tests: parser 33 + validator 53 + generator 29
+122 tests: parser 34 + validator 58 + generator 30
 
 ## License
 

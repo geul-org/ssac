@@ -117,7 +117,7 @@ files/                           # 기초 자료
 ## 외부 검증 프로젝트 구조
 
 `ssac validate <project-root>` 시 자동 감지:
-- `<root>/service/<domain>/*.go` — sequence spec (도메인 서브 폴더 필수, flat service/*.go는 ERROR)
+- `<root>/service/<domain>/*.ssac` — sequence spec (도메인 서브 폴더 필수, flat service/*.ssac는 ERROR)
 - `<root>/db/*.sql` — DDL (CREATE TABLE → 컬럼 타입, FK, Index)
 - `<root>/db/queries/*.sql` — sqlc 쿼리 (파일명→모델, `-- name: Method :cardinality`)
 - `<root>/api/openapi.yaml` — OpenAPI 3.0 (operationId=함수명, x-pagination/sort/filter/include)
@@ -142,12 +142,12 @@ files/                           # 기초 자료
 - **x-pagination 타입 교차검증**: offset↔Page, cursor↔Cursor 불일치 → ERROR
 - **@response 간단쓰기**: `@response var` → `c.JSON(200, var)`. Wrapper 고정 필드 OpenAPI 교차 검증 (Page: items/total, Cursor: items/next_cursor/has_next)
 - **모델 인터페이스 파생**: 3 SSOT 교차(sqlc 카디널리티 + SSaC Inputs + OpenAPI x-확장) → `<outDir>/model/models_gen.go`
-- **도메인 폴더 구조**: `service/<domain>/*.go` 필수 (flat service/*.go는 ERROR). `service/auth/login.go` → `Domain="auth"` → `outDir/auth/login.go`, `package auth`
+- **도메인 폴더 구조**: `service/<domain>/*.ssac` 필수 (flat service/*.ssac는 ERROR). `service/auth/login.ssac` → `Domain="auth"` → `outDir/auth/login.go`, `package auth`
 - **@call 코드젠**: `@call pkg.Func({Key: value})` → `pkg.Func(pkg.FuncRequest{Key: value, ...})`. result 없음→`_, err` guard형(401), 있음→value형(500)
 - **@state 코드젠**: `err := {id}state.CanTransition({id}state.Input{...}, "transition")` (error 반환), import `"states/{id}state"`
 - **@auth 코드젠**: `authz.Check(currentUser, "action", "resource", authz.Input{...})`
 - **Spec 파일 imports**: spec 파일의 Go import 선언이 생성 코드에 전달됨
-- **패키지 접두사 모델**: `pkg.Model.Method({...})` — 소문자 접두사 → 패키지 Go interface 교차 검증. interface 없으면 WARNING, 메서드 없으면 ERROR + 사용 가능 목록. `models_gen.go` 제외. `Sequence.Package` 필드로 추적
+- **패키지 접두사 모델**: `pkg.Model.Method({...})` — 소문자 접두사 → 패키지 Go interface 교차 검증. interface 없으면 WARNING, 메서드 없으면 ERROR + 사용 가능 목록. 파라미터 매칭: SSaC keys ↔ interface params (`context.Context` 제외). `models_gen.go` 제외. `Sequence.Package` 필드로 추적
 
 ## 더미 프로젝트
 
