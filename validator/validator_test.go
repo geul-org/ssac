@@ -652,6 +652,80 @@ func searchSubstr(s, substr string) bool {
 	return false
 }
 
+// --- 외부 검증: 패키지 접두사 모델 ---
+
+func TestValidatePackageModelMethodExists(t *testing.T) {
+	st := &SymbolTable{
+		Models: map[string]ModelSymbol{
+			"session.Session": {Methods: map[string]MethodInfo{"Get": {}, "Set": {}, "Delete": {}}},
+		},
+		Operations: map[string]OperationSymbol{},
+		DDLTables:  map[string]DDLTable{},
+	}
+	funcs := []parser.ServiceFunc{{
+		Name: "GetSession", FileName: "get_session.go",
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqGet, Package: "session", Model: "Session.Get", Inputs: map[string]string{"token": "request.Token"}, Result: &parser.Result{Type: "Session", Var: "session"}},
+		},
+	}}
+	errs := ValidateWithSymbols(funcs, st)
+	assertNoErrors(t, errs)
+}
+
+func TestValidatePackageModelMethodMissing(t *testing.T) {
+	st := &SymbolTable{
+		Models: map[string]ModelSymbol{
+			"session.Session": {Methods: map[string]MethodInfo{"Get": {}, "Set": {}, "Delete": {}}},
+		},
+		Operations: map[string]OperationSymbol{},
+		DDLTables:  map[string]DDLTable{},
+	}
+	funcs := []parser.ServiceFunc{{
+		Name: "GetSession", FileName: "get_session.go",
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqGet, Package: "session", Model: "Session.Gett", Inputs: map[string]string{"token": "request.Token"}, Result: &parser.Result{Type: "Session", Var: "session"}},
+		},
+	}}
+	errs := ValidateWithSymbols(funcs, st)
+	assertHasError(t, errs, `메서드 "Gett" 없음`)
+	assertHasError(t, errs, "사용 가능: Delete, Get, Set")
+}
+
+func TestValidatePackageModelNoInterface(t *testing.T) {
+	st := &SymbolTable{
+		Models:     map[string]ModelSymbol{},
+		Operations: map[string]OperationSymbol{},
+		DDLTables:  map[string]DDLTable{},
+	}
+	funcs := []parser.ServiceFunc{{
+		Name: "GetSession", FileName: "get_session.go",
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqGet, Package: "session", Model: "Session.Get", Inputs: map[string]string{"token": "request.Token"}, Result: &parser.Result{Type: "Session", Var: "session"}},
+		},
+	}}
+	errs := ValidateWithSymbols(funcs, st)
+	assertHasWarning(t, errs, "패키지 interface를 찾을 수 없습니다")
+}
+
+func TestValidatePackageModelSkipDDL(t *testing.T) {
+	// 패키지 모델은 DDL 모델 체크를 하지 않음 — "Session" DDL 테이블 없어도 에러 아님
+	st := &SymbolTable{
+		Models: map[string]ModelSymbol{
+			"session.Session": {Methods: map[string]MethodInfo{"Get": {}}},
+		},
+		Operations: map[string]OperationSymbol{},
+		DDLTables:  map[string]DDLTable{}, // Session DDL 없음
+	}
+	funcs := []parser.ServiceFunc{{
+		Name: "GetSession", FileName: "get_session.go",
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqGet, Package: "session", Model: "Session.Get", Inputs: map[string]string{"token": "request.Token"}, Result: &parser.Result{Type: "Session", Var: "session"}},
+		},
+	}}
+	errs := ValidateWithSymbols(funcs, st)
+	assertNoErrors(t, errs)
+}
+
 // --- 외부 검증: pagination type ---
 
 func TestValidatePaginationOffsetWithPage(t *testing.T) {

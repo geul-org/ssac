@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	ssacparser "github.com/geul-org/ssac/parser"
 	"gopkg.in/yaml.v3"
 )
 
@@ -377,6 +378,98 @@ func (st *SymbolTable) loadGoInterfaces(dir string) error {
 	}
 
 	return nil
+}
+
+// LoadPackageInterfaces는 서비스 파일의 import 경로에서 패키지 접두사 모델의 Go interface를 파싱한다.
+// 패키지명 → import 경로 매핑 후, 해당 경로에서 interface를 찾아 st.Models["pkg.Model"]에 등록.
+func (st *SymbolTable) LoadPackageInterfaces(funcs []ssacparser.ServiceFunc, projectRoot string) {
+	// 1. 모든 서비스 파일에서 패키지 접두사 모델 수집
+	pkgModels := map[string]bool{} // "session" → true
+	for _, sf := range funcs {
+		for _, seq := range sf.Sequences {
+			if seq.Package != "" {
+				pkgModels[seq.Package] = true
+			}
+		}
+	}
+	if len(pkgModels) == 0 {
+		return
+	}
+
+	// 2. 서비스 파일 import에서 패키지명 → import 경로 매핑
+	pkgPaths := map[string]string{} // "session" → "myapp/session"
+	for _, sf := range funcs {
+		for _, imp := range sf.Imports {
+			// import 경로의 마지막 segment가 패키지명
+			segments := strings.Split(imp, "/")
+			pkgName := segments[len(segments)-1]
+			if pkgModels[pkgName] {
+				pkgPaths[pkgName] = imp
+			}
+		}
+	}
+
+	// 3. 각 패키지 경로에서 Go interface 파싱
+	for pkgName, impPath := range pkgPaths {
+		// projectRoot 기준으로 경로 탐색 (상대 경로)
+		dir := filepath.Join(projectRoot, impPath)
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			continue
+		}
+		st.loadPackageGoInterfaces(pkgName, dir)
+	}
+}
+
+// loadPackageGoInterfaces는 디렉토리에서 Go interface를 파싱하여 "pkg.Model" 키로 등록한다.
+func (st *SymbolTable) loadPackageGoInterfaces(pkgName, dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+
+	fset := token.NewFileSet()
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") {
+			continue
+		}
+
+		f, err := parser.ParseFile(fset, filepath.Join(dir, entry.Name()), nil, parser.ParseComments)
+		if err != nil {
+			continue
+		}
+
+		for _, decl := range f.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				ts, ok := spec.(*ast.TypeSpec)
+				if !ok {
+					continue
+				}
+				iface, ok := ts.Type.(*ast.InterfaceType)
+				if !ok {
+					continue
+				}
+				ms := ModelSymbol{Methods: make(map[string]MethodInfo)}
+				for _, method := range iface.Methods.List {
+					if len(method.Names) > 0 {
+						ms.Methods[method.Names[0].Name] = MethodInfo{}
+					}
+				}
+				if len(ms.Methods) > 0 {
+					// "Model" suffix 제거: "SessionModel" → "Session"
+					modelName := ts.Name.Name
+					if strings.HasSuffix(modelName, "Model") {
+						modelName = modelName[:len(modelName)-5]
+					}
+					key := pkgName + "." + modelName
+					st.Models[key] = ms
+				}
+			}
+		}
+	}
 }
 
 // --- OpenAPI YAML 구조체 ---

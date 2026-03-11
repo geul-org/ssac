@@ -14,8 +14,9 @@ type Sequence struct {
 	Type string // "get", "post", "put", "delete", "empty", "exists", "state", "auth", "call", "response"
 
 	// get/post/put/delete/call 공통: 함수 호출
-	Model string // "Course.FindByID" 또는 "auth.VerifyPassword"
-	Args  []Arg  // 호출 인자
+	Package string // "session" (패키지 접두사, 없으면 "")
+	Model   string // "Course.FindByID" 또는 "auth.VerifyPassword"
+	Args    []Arg  // 호출 인자
 
 	// get/post/call: 대입
 	Result *Result // 결과 바인딩 (nil이면 대입 없음)

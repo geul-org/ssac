@@ -585,6 +585,48 @@ func ListGigs(c *gin.Context) {}
 	}
 }
 
+// --- 패키지 접두사 모델 ---
+
+func TestParsePackagePrefixModel(t *testing.T) {
+	src := `package service
+
+// @get Session session = session.Session.Get({token: request.Token})
+func GetSession(c *gin.Context) {}
+`
+	sfs := parseTestFile(t, src)
+	seq := sfs[0].Sequences[0]
+	assertEqual(t, "Package", seq.Package, "session")
+	assertEqual(t, "Model", seq.Model, "Session.Get")
+	if seq.Result == nil {
+		t.Fatal("expected result")
+	}
+	assertEqual(t, "Result.Type", seq.Result.Type, "Session")
+}
+
+func TestParseNoPackagePrefix(t *testing.T) {
+	src := `package service
+
+// @get User user = User.FindByID({ID: request.ID})
+func GetUser(c *gin.Context) {}
+`
+	sfs := parseTestFile(t, src)
+	seq := sfs[0].Sequences[0]
+	assertEqual(t, "Package", seq.Package, "")
+	assertEqual(t, "Model", seq.Model, "User.FindByID")
+}
+
+func TestParsePackagePrefixPut(t *testing.T) {
+	src := `package service
+
+// @put cache.Cache.Set({key: request.Key, value: request.Value})
+func SetCache(c *gin.Context) {}
+`
+	sfs := parseTestFile(t, src)
+	seq := sfs[0].Sequences[0]
+	assertEqual(t, "Package", seq.Package, "cache")
+	assertEqual(t, "Model", seq.Model, "Cache.Set")
+}
+
 // --- helpers ---
 
 func parseTestFile(t *testing.T, src string) []ServiceFunc {

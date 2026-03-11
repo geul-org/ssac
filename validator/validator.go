@@ -2,6 +2,7 @@ package validator
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/geul-org/ssac/parser"
@@ -266,6 +267,30 @@ func validateModel(sf parser.ServiceFunc, st *SymbolTable) []ValidationError {
 			continue
 		}
 		modelName, methodName := parts[0], parts[1]
+
+		if seq.Package != "" {
+			// 패키지 접두사 모델: "pkg.Model" 키로 조회
+			pkgModelKey := seq.Package + "." + modelName
+			ms, ok := st.Models[pkgModelKey]
+			if !ok {
+				// interface가 없으면 WARNING (검증 불가)
+				errs = append(errs, ValidationError{
+					FileName: ctx.fileName, FuncName: ctx.funcName, SeqIndex: ctx.seqIndex,
+					Tag: "@" + seq.Type, Message: fmt.Sprintf("%s.%s — 패키지 interface를 찾을 수 없습니다. 검증을 건너뜁니다", seq.Package, modelName), Level: "WARNING",
+				})
+				continue
+			}
+			if !ms.HasMethod(methodName) {
+				// 사용 가능 메서드 안내
+				available := make([]string, 0, len(ms.Methods))
+				for m := range ms.Methods {
+					available = append(available, m)
+				}
+				sort.Strings(available)
+				errs = append(errs, ctx.err("@"+seq.Type, fmt.Sprintf("%s.%s — 메서드 %q 없음. 사용 가능: %s", seq.Package, modelName, methodName, strings.Join(available, ", "))))
+			}
+			continue
+		}
 
 		ms, ok := st.Models[modelName]
 		if !ok {

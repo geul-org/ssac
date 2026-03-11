@@ -221,7 +221,7 @@ func parseCRUD(seqType, rest string, hasResult bool) (*Sequence, error) {
 		if err != nil {
 			return nil, err
 		}
-		seq.Model = model
+		seq.Package, seq.Model = splitPackagePrefix(model)
 		seq.Inputs = inputs
 	} else {
 		// Model.Method({Key: val, ...})
@@ -229,7 +229,7 @@ func parseCRUD(seqType, rest string, hasResult bool) (*Sequence, error) {
 		if err != nil {
 			return nil, err
 		}
-		seq.Model = model
+		seq.Package, seq.Model = splitPackagePrefix(model)
 		seq.Inputs = inputs
 	}
 
@@ -529,6 +529,29 @@ func splitTargetMessage(s string) (string, string) {
 	target := strings.TrimSpace(s[:quoteIdx])
 	msg, _ := extractQuoted(s[quoteIdx:])
 	return target, msg
+}
+
+// splitPackagePrefix는 "session.Session.Get" → ("session", "Session.Get")로 분리한다.
+// "Course.FindByID" → ("", "Course.FindByID") — 2-part는 패키지 없음.
+// @call은 이미 pkg.Func 형식이므로 이 함수를 사용하지 않는다.
+func splitPackagePrefix(model string) (pkg, rest string) {
+	// dot 개수: 1개 → 기존 Model.Method, 2개 이상 → pkg.Model.Method
+	firstDot := strings.IndexByte(model, '.')
+	if firstDot < 0 {
+		return "", model
+	}
+	secondDot := strings.IndexByte(model[firstDot+1:], '.')
+	if secondDot < 0 {
+		// "Model.Method" — no package prefix
+		return "", model
+	}
+	// "pkg.Model.Method" — first part is package (lowercase check)
+	pkg = model[:firstDot]
+	if len(pkg) > 0 && pkg[0] >= 'a' && pkg[0] <= 'z' {
+		return pkg, model[firstDot+1:]
+	}
+	// If first part starts with uppercase, it's not a package prefix
+	return "", model
 }
 
 // collectImports는 AST에서 import 경로를 수집한다.

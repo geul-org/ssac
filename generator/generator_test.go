@@ -516,6 +516,59 @@ func TestGeneratePageNoHasTotal(t *testing.T) {
 	assertContains(t, code, `gigPage, err :=`)
 }
 
+// --- 패키지 접두사 모델 ---
+
+func TestGeneratePackageModelCall(t *testing.T) {
+	sf := parser.ServiceFunc{
+		Name: "GetSession", FileName: "get_session.go",
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqGet, Package: "session", Model: "Session.Get", Inputs: map[string]string{"token": "request.Token"}, Result: &parser.Result{Type: "Session", Var: "session"}},
+			{Type: parser.SeqResponse, Fields: map[string]string{"session": "session"}},
+		},
+	}
+	code := mustGenerate(t, sf, nil)
+	assertContains(t, code, `sessionModel.Get(token)`)
+	assertContains(t, code, `"session": session`)
+}
+
+func TestGeneratePackageModelSkipInterface(t *testing.T) {
+	st := &validator.SymbolTable{
+		Models: map[string]validator.ModelSymbol{
+			"Gig": {Methods: map[string]validator.MethodInfo{
+				"FindByID": {Cardinality: "one"},
+			}},
+			"session.Session": {Methods: map[string]validator.MethodInfo{
+				"Get": {},
+			}},
+		},
+		DDLTables: map[string]validator.DDLTable{
+			"gigs": {Columns: map[string]string{"id": "int64"}},
+		},
+		Operations: map[string]validator.OperationSymbol{},
+	}
+	funcs := []parser.ServiceFunc{{
+		Name: "GetGig", FileName: "get_gig.go",
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqGet, Model: "Gig.FindByID", Inputs: map[string]string{"ID": "request.ID"}, Result: &parser.Result{Type: "Gig", Var: "gig"}},
+			{Type: parser.SeqGet, Package: "session", Model: "Session.Get", Inputs: map[string]string{"token": "request.Token"}, Result: &parser.Result{Type: "Session", Var: "session"}},
+			{Type: parser.SeqResponse, Fields: map[string]string{"gig": "gig"}},
+		},
+	}}
+
+	outDir := t.TempDir()
+	if err := GenerateModelInterfaces(funcs, st, outDir); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := readFile(t, outDir+"/model/models_gen.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Gig 모델은 포함, session.Session 패키지 모델은 제외
+	assertContains(t, data, "type GigModel interface")
+	assertNotContains(t, data, "SessionModel")
+}
+
 // --- helpers ---
 
 func mustGenerate(t *testing.T, sf parser.ServiceFunc, st *validator.SymbolTable) string {

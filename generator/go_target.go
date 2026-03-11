@@ -201,6 +201,7 @@ func buildTemplateData(seq parser.Sequence, errDeclared *bool, declaredVars map[
 				d.FuncMethod = ucFirst(parts[1])
 			}
 		} else {
+			// 패키지 접두사 모델이든 일반 모델이든 동일: modelName + "Model." + method
 			d.ModelCall = lcFirst(parts[0]) + "Model." + parts[1]
 		}
 	}
@@ -717,6 +718,9 @@ func defaultMessage(seq parser.Sequence) string {
 	if seq.Model != "" {
 		parts := strings.SplitN(seq.Model, ".", 2)
 		modelName = parts[0]
+		if seq.Package != "" {
+			modelName = seq.Package + "." + modelName
+		}
 	}
 
 	switch seq.Type {
@@ -785,8 +789,8 @@ func collectModelUsages(funcs []parser.ServiceFunc) []modelUsage {
 	var usages []modelUsage
 	for _, sf := range funcs {
 		for _, seq := range sf.Sequences {
-			if seq.Model == "" || seq.Type == parser.SeqCall {
-				continue
+			if seq.Model == "" || seq.Type == parser.SeqCall || seq.Package != "" {
+				continue // @call과 패키지 접두사 모델은 models_gen.go에 포함하지 않음
 			}
 			parts := strings.SplitN(seq.Model, ".", 2)
 			if len(parts) < 2 {
