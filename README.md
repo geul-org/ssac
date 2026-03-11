@@ -142,6 +142,7 @@ When external SSOT (symbol table) is available, `ssac gen` adds:
 - **@state codegen**: `err := {id}state.CanTransition({id}state.Input{...}, "transition")` (returns error, not bool)
 - **@auth codegen**: `authz.Check(currentUser, "action", "resource", authz.Input{...})`
 - **Spec file imports**: Go import declarations in spec files are passed to generated code
+- **Package prefix model**: `pkg.Model.Method({...})` — non-DDL models validated against Go interface. Missing interface → WARNING, missing method → ERROR with available methods. Excluded from `models_gen.go`
 
 ## OpenAPI x- Extensions
 
@@ -205,7 +206,7 @@ files/                           # Design documents
 go test ./parser/... ./validator/... ./generator/... -count=1
 ```
 
-106 tests: parser 30 + validator 49 + generator 27
+115 tests: parser 33 + validator 53 + generator 29
 
 ## License
 

@@ -43,6 +43,7 @@ ssac gen <service-dir> <out>  # validate → codegen → gofmt (심볼 테이블
 // @post Type var = Model.Method({Key: value, ...})         — 리소스 생성 (result 필수)
 // @put Model.Method({Key: value, ...})                     — 리소스 수정 (result 없음)
 // @delete Model.Method({Key: value, ...})                  — 리소스 삭제 (result 없음)
+// — 패키지 접두사 모델: @get Type var = pkg.Model.Method({...}) (소문자 접두사 → 외부 패키지 모델)
 // @empty target "message"                                  — nil이면 종료 (404)
 // @exists target "message"                                 — 존재하면 종료 (409)
 // @state diagramID {inputs} "transition" "msg"             — 상태 전이 검사 (409)
@@ -146,6 +147,7 @@ files/                           # 기초 자료
 - **@state 코드젠**: `err := {id}state.CanTransition({id}state.Input{...}, "transition")` (error 반환), import `"states/{id}state"`
 - **@auth 코드젠**: `authz.Check(currentUser, "action", "resource", authz.Input{...})`
 - **Spec 파일 imports**: spec 파일의 Go import 선언이 생성 코드에 전달됨
+- **패키지 접두사 모델**: `pkg.Model.Method({...})` — 소문자 접두사 → 패키지 Go interface 교차 검증. interface 없으면 WARNING, 메서드 없으면 ERROR + 사용 가능 목록. `models_gen.go` 제외. `Sequence.Package` 필드로 추적
 
 ## 더미 프로젝트
 

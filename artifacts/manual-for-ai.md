@@ -26,6 +26,13 @@ Go 1.24+, `go/ast` (parsing), `text/template` (codegen), `gopkg.in/yaml.v3` (Ope
 // @delete Model.Method({Key: value, ...})                — Delete (no result)
 ```
 
+**Package prefix model**: `pkg.Model.Method({...})` — for non-DDL models (session, cache, file, external).
+- Lowercase first segment = package prefix: `session.Session.Get(...)` → Package="session", Model="Session.Get"
+- No prefix (uppercase start) = DDL table model: `User.FindByID(...)` → Package="", Model="User.FindByID"
+- Parser IR: `Sequence.Package` field stores package prefix (empty string if none)
+- Package models are validated against Go interfaces (`st.Models["pkg.Model"]`), not DDL tables
+- Package models are excluded from `models_gen.go` generation
+
 **Generic result types**: `Page[T]` and `Cursor[T]` wrappers for paginated results.
 - Parser IR: `Result.Wrapper` = `"Page"` or `"Cursor"`, `Result.Type` = inner type
 - Model interface returns `(*pagination.Page[T], error)` or `(*pagination.Cursor[T], error)`
@@ -213,6 +220,7 @@ Additional features when symbol table (external SSOT) is available:
 - **@auth codegen**: `@auth "action" "resource" {inputs}` → `authz.Check(currentUser, "action", "resource", authz.Input{...})`
 - **@call codegen**: `@call pkg.Func({Key: value})` → `pkg.Func(pkg.FuncRequest{Key: value, ...})`. No result → `_, err` guard-style (401), with result → value-style (500)
 - **Spec file imports**: Parser collects Go import declarations from spec files and passes them to generated code
+- **Package prefix model**: `pkg.Model.Method({...})` → validates against Go interface in package path. Missing interface → WARNING, missing method → ERROR with available methods list. Package models skip DDL check and `models_gen.go`
 
 Singularization rules (sqlc filename → model name): `ies`→`y`, `sses`→`ss`, `xes`→`x`, otherwise remove trailing `s`
 
@@ -251,4 +259,4 @@ Codegen effects:
 - Filenames: snake_case, variables/functions: camelCase, types: PascalCase
 - Go common initialisms: `ID`, `URL`, `HTTP`, `API` etc. — all-caps (exported) or all-lowercase (unexported first word)
 - Tests: `go test ./parser/... ./validator/... ./generator/... -count=1`
-- 106 tests: parser 30 + validator 49 + generator 27
+- 115 tests: parser 33 + validator 53 + generator 29

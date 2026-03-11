@@ -52,6 +52,7 @@ ssac validate specs/dummy-study       # 외부 SSOT 교차 검증 (자동 감지
 | 외부 | request 필드 존재 (OpenAPI, 정방향+역방향) |
 | 외부 | response 필드 매핑 (OpenAPI, 정방향+역방향) |
 | 외부 | Stale 데이터 경고 (put/delete 후 재조회 없이 response 사용) |
+| 외부 | 패키지 모델 interface 교차 검증 (메서드 없으면 ERROR + 사용 가능 목록) |
 
 ### gen
 
@@ -148,6 +149,25 @@ specs/service/
 ---
 
 ## 시퀀스 타입 (10종)
+
+### 패키지 접두사 모델
+
+DDL 테이블이 아닌 외부 패키지 모델(session, cache, file 등)은 패키지 접두사를 붙여 구분한다.
+
+```go
+// @get Session session = session.Session.Get({token: request.Token})
+// @put cache.Cache.Set({key: request.Key, value: request.Value})
+// @delete file.File.Remove({path: request.Path})
+```
+
+판단 규칙:
+- 첫 번째 점 앞이 **소문자**로 시작 → 패키지 접두사 (`session.Session.Get` → Package="session")
+- 첫 번째 점 앞이 **대문자**로 시작 → 일반 DDL 모델 (`User.FindByID` → Package="")
+
+패키지 모델은:
+- Go interface에서 메서드를 교차 검증 (interface 없으면 WARNING, 메서드 없으면 ERROR + 사용 가능 메서드 안내)
+- DDL 테이블 검증을 건너뜀
+- `models_gen.go`에 포함되지 않음 (외부 패키지가 interface 제공)
 
 ### @get — 리소스 조회
 
