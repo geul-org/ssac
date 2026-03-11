@@ -8,7 +8,7 @@ var goTemplates = template.Must(template.New("").Parse(`
 {{end}}
 
 {{- define "get" -}}
-	{{.Result.Var}}, {{if .HasTotal}}total, {{end}}err {{if .ReAssign}}={{else}}:={{end}} {{.ModelCall}}({{.ArgsCode}})
+	{{if .Unused}}_{{else}}{{.Result.Var}}{{end}}, {{if .HasTotal}}total, {{end}}err {{if .ReAssign}}={{else}}:={{end}} {{.ModelCall}}({{.ArgsCode}})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "{{.Message}}"})
 		return
@@ -16,7 +16,7 @@ var goTemplates = template.Must(template.New("").Parse(`
 {{end}}
 
 {{- define "post" -}}
-	{{.Result.Var}}, err {{if .ReAssign}}={{else}}:={{end}} {{.ModelCall}}({{.ArgsCode}})
+	{{if .Unused}}_{{else}}{{.Result.Var}}{{end}}, err {{if .ReAssign}}={{else}}:={{end}} {{.ModelCall}}({{.ArgsCode}})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "{{.Message}}"})
 		return
@@ -61,14 +61,14 @@ var goTemplates = template.Must(template.New("").Parse(`
 {{end}}
 
 {{- define "auth" -}}
-	if err := authz.Check(currentUser, "{{.Action}}", "{{.Resource}}", authz.Input{ {{.InputFields}} }); err != nil {
+	if _, err {{if .FirstErr}}:={{else}}={{end}} authz.Check(authz.CheckRequest{Action: "{{.Action}}", Resource: "{{.Resource}}", {{.InputFields}} }); err != nil {
 		c.JSON(http.StatusForbidden, gin.H{"error": "{{.Message}}"})
 		return
 	}
 {{end}}
 
 {{- define "call_with_result" -}}
-	{{.Result.Var}}, err {{if .ReAssign}}={{else}}:={{end}} {{.PkgName}}.{{.FuncMethod}}({{.PkgName}}.{{.FuncMethod}}Request{ {{.InputFields}} })
+	{{if .Unused}}_{{else}}{{.Result.Var}}{{end}}, err {{if .ReAssign}}={{else}}:={{end}} {{.PkgName}}.{{.FuncMethod}}({{.PkgName}}.{{.FuncMethod}}Request{ {{.InputFields}} })
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "{{.Message}}"})
 		return
@@ -108,14 +108,14 @@ var goTemplates = template.Must(template.New("").Parse(`
 {{end}}
 
 {{- define "sub_get" -}}
-	{{.Result.Var}}, {{if .HasTotal}}total, {{end}}err {{if .ReAssign}}={{else}}:={{end}} {{.ModelCall}}({{.ArgsCode}})
+	{{if .Unused}}_{{else}}{{.Result.Var}}{{end}}, {{if .HasTotal}}total, {{end}}err {{if .ReAssign}}={{else}}:={{end}} {{.ModelCall}}({{.ArgsCode}})
 	if err != nil {
 		return fmt.Errorf("{{.Message}}: %w", err)
 	}
 {{end}}
 
 {{- define "sub_post" -}}
-	{{.Result.Var}}, err {{if .ReAssign}}={{else}}:={{end}} {{.ModelCall}}({{.ArgsCode}})
+	{{if .Unused}}_{{else}}{{.Result.Var}}{{end}}, err {{if .ReAssign}}={{else}}:={{end}} {{.ModelCall}}({{.ArgsCode}})
 	if err != nil {
 		return fmt.Errorf("{{.Message}}: %w", err)
 	}
@@ -154,13 +154,13 @@ var goTemplates = template.Must(template.New("").Parse(`
 {{end}}
 
 {{- define "sub_auth" -}}
-	if err := authz.Check(currentUser, "{{.Action}}", "{{.Resource}}", authz.Input{ {{.InputFields}} }); err != nil {
+	if _, err {{if .FirstErr}}:={{else}}={{end}} authz.Check(authz.CheckRequest{Action: "{{.Action}}", Resource: "{{.Resource}}", {{.InputFields}} }); err != nil {
 		return fmt.Errorf("{{.Message}}: %w", err)
 	}
 {{end}}
 
 {{- define "sub_call_with_result" -}}
-	{{.Result.Var}}, err {{if .ReAssign}}={{else}}:={{end}} {{.PkgName}}.{{.FuncMethod}}({{.PkgName}}.{{.FuncMethod}}Request{ {{.InputFields}} })
+	{{if .Unused}}_{{else}}{{.Result.Var}}{{end}}, err {{if .ReAssign}}={{else}}:={{end}} {{.PkgName}}.{{.FuncMethod}}({{.PkgName}}.{{.FuncMethod}}Request{ {{.InputFields}} })
 	if err != nil {
 		return fmt.Errorf("{{.Message}}: %w", err)
 	}

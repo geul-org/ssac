@@ -69,7 +69,7 @@ Args 형식: 모든 시퀀스 타입에서 `{Key: value}` 통일 문법 사용 (
 - `message.Field` → subscribe 함수에서 큐 페이로드 접근 (HTTP 함수에서는 사용 불가)
 - `request.Field` → 코드젠에서 `lcFirst(Field)` 로컬 변수로 치환
 - `currentUser.Field` → `currentUser.Field` 실제 변수 유지
-- `config.Field` → `config.Field` 실제 변수 유지
+- `config.Field` → `config.Get("UPPER_SNAKE")` 코드젠 변환 (PascalCase → UPPER_SNAKE_CASE)
 - `query` → 코드젠에서 `opts` (QueryOpts) 변수로 변환. OpenAPI x-extensions와 교차 검증
 
 파서 IR: 모든 시퀀스 타입이 `seq.Inputs` (map[string]string)을 사용. CRUD도 `seq.Args` 대신 `seq.Inputs` 사용.
@@ -133,7 +133,7 @@ files/                           # 기초 자료
 - 함수 시그니처: `func Name(c *gin.Context)`
 - Path params: `c.Param()` + 타입 변환
 - Request body: `c.ShouldBindJSON(&req)` (2+ request 파라미터, 또는 POST/PUT에서 1+) 또는 `c.Query()`
-- currentUser: `c.MustGet("currentUser").(*model.CurrentUser)` — @auth 또는 args에서 currentUser 참조 시 자동 생성
+- currentUser: `c.MustGet("currentUser").(*model.CurrentUser)` — inputs에서 `currentUser.*` 참조 시 자동 생성
 
 심볼 테이블(외부 SSOT)이 있을 때 추가되는 기능:
 
@@ -149,11 +149,14 @@ files/                           # 기초 자료
 - **도메인 폴더 구조**: `service/<domain>/*.ssac` 필수 (flat service/*.ssac는 ERROR). `service/auth/login.ssac` → `Domain="auth"` → `outDir/auth/login.go`, `package auth`
 - **@call 코드젠**: `@call pkg.Func({Key: value})` → `pkg.Func(pkg.FuncRequest{Key: value, ...})`. result 없음→`_, err` guard형(401), 있음→value형(500)
 - **@state 코드젠**: `err := {id}state.CanTransition({id}state.Input{...}, "transition")` (error 반환), import `"states/{id}state"`
-- **@auth 코드젠**: `authz.Check(currentUser, "action", "resource", authz.Input{...})`
+- **@auth 코드젠**: `authz.Check(authz.CheckRequest{Action: "action", Resource: "resource", ...})` (403). `currentUser`는 inputs에 `currentUser.*` 참조 시에만 자동 추출
 - **Spec 파일 imports**: spec 파일의 Go import 선언이 생성 코드에 전달됨
 - **패키지 접두사 모델**: `pkg.Model.Method({...})` — 소문자 접두사 → 패키지 Go interface 교차 검증. interface 없으면 WARNING, 메서드 없으면 ERROR + 사용 가능 목록. 파라미터 매칭: SSaC keys ↔ interface params (`context.Context` 제외). `models_gen.go` 제외. `Sequence.Package` 필드로 추적
 - **@publish 코드젠**: `queue.Publish(c.Request.Context(), ...)` (HTTP) / `queue.Publish(ctx, ...)` (subscribe). 옵션: `queue.WithDelay()`, `queue.WithPriority()`. import `"queue"` 자동 추가
 - **@subscribe 코드젠**: `func Name(ctx context.Context, message T) error`. 에러 → `return fmt.Errorf(...)`, 성공 → `return nil`. 메시지 타입은 .ssac 파일 내 Go struct. 검증: 파라미터 필수, 변수명 `message`, struct/필드 존재 확인
+- **@call 입력 타입 검증**: @call inputs 필드 타입을 func Request struct 필드 타입과 비교. DDL 역추적 타입 ≠ Request 타입 → ERROR
+- **미사용 변수 `_` 처리**: result 변수가 이후 시퀀스(guard target, inputs, response)에서 미참조 시 `_, err :=` 생성
+- **config.* 코드젠**: `config.SMTPHost` → `config.Get("SMTP_HOST")`. PascalCase → UPPER_SNAKE_CASE. config 참조 시 import `"config"` 자동 추가
 
 ## 더미 프로젝트
 

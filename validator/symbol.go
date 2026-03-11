@@ -36,8 +36,9 @@ func (ms ModelSymbol) HasMethod(name string) bool {
 
 // MethodInfo는 모델 메서드의 상세 정보다.
 type MethodInfo struct {
-	Cardinality string   // "one", "many", "exec"
-	Params      []string // interface 파라미터명 (context.Context 제외, 패키지 모델용)
+	Cardinality string            // "one", "many", "exec"
+	Params      []string          // interface 파라미터명 (context.Context 제외, 패키지 모델용)
+	ParamTypes  map[string]string // 파라미터명 → Go 타입 (e.g. "amount" → "int"). @call Request struct 필드용
 }
 
 // DDLTable은 DDL에서 파싱한 테이블 컬럼 정보다.
@@ -422,6 +423,7 @@ func (st *SymbolTable) LoadPackageInterfaces(funcs []ssacparser.ServiceFunc, pro
 }
 
 // loadPackageGoInterfaces는 디렉토리에서 Go interface를 파싱하여 "pkg.Model" 키로 등록한다.
+// 또한 {Method}Request struct를 파싱하여 ParamTypes에 필드 타입을 저장한다.
 func (st *SymbolTable) loadPackageGoInterfaces(pkgName, dir string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -429,6 +431,48 @@ func (st *SymbolTable) loadPackageGoInterfaces(pkgName, dir string) {
 	}
 
 	fset := token.NewFileSet()
+	// 1차: Request struct 수집
+	requestStructs := map[string]map[string]string{} // "VerifyPasswordRequest" → {"Email": "string", "Password": "string"}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, filepath.Join(dir, entry.Name()), nil, parser.ParseComments)
+		if err != nil {
+			continue
+		}
+		for _, decl := range f.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				ts, ok := spec.(*ast.TypeSpec)
+				if !ok {
+					continue
+				}
+				if !strings.HasSuffix(ts.Name.Name, "Request") {
+					continue
+				}
+				st2, ok := ts.Type.(*ast.StructType)
+				if !ok {
+					continue
+				}
+				fields := map[string]string{}
+				for _, field := range st2.Fields.List {
+					typeName := exprToGoType(field.Type)
+					for _, name := range field.Names {
+						fields[name.Name] = typeName
+					}
+				}
+				if len(fields) > 0 {
+					requestStructs[ts.Name.Name] = fields
+				}
+			}
+		}
+	}
+
+	// 2차: interface 파싱
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") {
 			continue
@@ -456,6 +500,7 @@ func (st *SymbolTable) loadPackageGoInterfaces(pkgName, dir string) {
 				ms := ModelSymbol{Methods: make(map[string]MethodInfo)}
 				for _, method := range iface.Methods.List {
 					if len(method.Names) > 0 {
+						methodName := method.Names[0].Name
 						var params []string
 						if ft, ok := method.Type.(*ast.FuncType); ok && ft.Params != nil {
 							for _, param := range ft.Params.List {
@@ -467,7 +512,13 @@ func (st *SymbolTable) loadPackageGoInterfaces(pkgName, dir string) {
 								}
 							}
 						}
-						ms.Methods[method.Names[0].Name] = MethodInfo{Params: params}
+						mi := MethodInfo{Params: params}
+						// Request struct 매칭: {MethodName}Request
+						reqStructName := methodName + "Request"
+						if fields, ok := requestStructs[reqStructName]; ok {
+							mi.ParamTypes = fields
+						}
+						ms.Methods[methodName] = mi
 					}
 				}
 				if len(ms.Methods) > 0 {
@@ -482,6 +533,23 @@ func (st *SymbolTable) loadPackageGoInterfaces(pkgName, dir string) {
 			}
 		}
 	}
+}
+
+// exprToGoType는 ast.Expr를 Go 타입 문자열로 변환한다.
+func exprToGoType(expr ast.Expr) string {
+	switch t := expr.(type) {
+	case *ast.Ident:
+		return t.Name
+	case *ast.SelectorExpr:
+		if x, ok := t.X.(*ast.Ident); ok {
+			return x.Name + "." + t.Sel.Name
+		}
+	case *ast.StarExpr:
+		return "*" + exprToGoType(t.X)
+	case *ast.ArrayType:
+		return "[]" + exprToGoType(t.Elt)
+	}
+	return "interface{}"
 }
 
 // isContextType는 ast.Expr이 context.Context 타입인지 확인한다.

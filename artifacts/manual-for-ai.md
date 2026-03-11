@@ -102,8 +102,8 @@ Target: variable (`course`) or variable.field (`course.InstructorID`)
 ```
 
 - `{inputs}`: JSON-style context for OPA policy (ownership, org, etc.)
-- Codegen: `authz.Check(currentUser, "action", "resource", authz.Input{...})`
-- `currentUser` auto-extracted from `c.MustGet("currentUser")`
+- Codegen: `authz.Check(authz.CheckRequest{Action: "action", Resource: "resource", ...})`
+- `currentUser` auto-extracted only if inputs reference `currentUser.*`
 
 ### Call — External Function
 
@@ -230,7 +230,7 @@ Generated code uses **gin** framework (`c *gin.Context`):
 - Success responses: `c.JSON(http.StatusOK, gin.H{...})` with field mapping, or `c.JSON(http.StatusOK, var)` for `@response var` shorthand
 - Path params: `c.Param("Name")` + type conversion
 - Request body: `c.ShouldBindJSON(&req)` (2+ request params, or 1+ in POST/PUT) or `c.Query("Name")` (single GET/DELETE)
-- currentUser: `c.MustGet("currentUser").(*model.CurrentUser)` — auto-generated when @auth or args reference currentUser
+- currentUser: `c.MustGet("currentUser").(*model.CurrentUser)` — auto-generated when inputs reference `currentUser.*`
 
 Additional features when symbol table (external SSOT) is available:
 
@@ -252,8 +252,11 @@ Additional features when symbol table (external SSOT) is available:
   - OpenAPI x-: infrastructure params validated against SSaC `query` usage
 - **Domain folder structure**: `service/<domain>/*.go` required (flat service/*.go is ERROR). `service/auth/login.go` → `Domain="auth"` → `outDir/auth/login.go`, `package auth`
 - **@state codegen**: `@state {id} {inputs} "transition"` → `err := {id}state.CanTransition({id}state.Input{...}, "transition")` (error return), import `"states/{id}state"`
-- **@auth codegen**: `@auth "action" "resource" {inputs}` → `authz.Check(currentUser, "action", "resource", authz.Input{...})`
+- **@auth codegen**: `@auth "action" "resource" {inputs}` → `authz.Check(authz.CheckRequest{Action: "action", Resource: "resource", ...})` (403 Forbidden). `currentUser` auto-extracted only if inputs reference `currentUser.*`
 - **@call codegen**: `@call pkg.Func({Key: value})` → `pkg.Func(pkg.FuncRequest{Key: value, ...})`. No result → `_, err` guard-style (401), with result → value-style (500)
+- **@call input type validation**: @call inputs field types compared against func Request struct field types. DDL-traced type != Request type → ERROR
+- **Unused variable `_` handling**: Result variables not referenced in subsequent sequences (guard targets, inputs, response fields) → `_, err :=` instead of `varName, err :=`
+- **config.* codegen**: `config.SMTPHost` → `config.Get("SMTP_HOST")` (PascalCase → UPPER_SNAKE_CASE). Import `"config"` auto-added when config references exist
 - **Spec file imports**: Parser collects Go import declarations from spec files and passes them to generated code
 - **Package prefix model**: `pkg.Model.Method({...})` → validates against Go interface in package path. Missing interface → WARNING, missing method → ERROR with available methods list. Parameter matching: SSaC keys ↔ interface params (`context.Context` excluded). Package models skip DDL check and `models_gen.go`
 - **Go reserved word validation**: DDL column names that are Go keywords (`type`, `range`, `select`, etc.) → ERROR with table name and rename suggestion. Prevents `models_gen.go` compile errors.
@@ -298,4 +301,4 @@ Codegen effects:
 - Filenames: snake_case, variables/functions: camelCase, types: PascalCase
 - Go common initialisms: `ID`, `URL`, `HTTP`, `API` etc. — all-caps (exported) or all-lowercase (unexported first word)
 - Tests: `go test ./parser/... ./validator/... ./generator/... -count=1`
-- 146 tests: parser 39 + validator 72 + generator 35
+- 148 tests: parser 41 + validator 65 + generator 42

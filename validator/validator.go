@@ -26,6 +26,7 @@ func ValidateWithSymbols(funcs []parser.ServiceFunc, st *SymbolTable) []Validati
 		errs = append(errs, validateResponse(sf, st)...)
 		errs = append(errs, validateQueryUsage(sf, st)...)
 		errs = append(errs, validatePaginationType(sf, st)...)
+		errs = append(errs, validateCallInputTypes(sf, st)...)
 	}
 	errs = append(errs, validateGoReservedWords(funcs, st)...)
 	return errs
@@ -562,6 +563,120 @@ func validatePaginationType(sf parser.ServiceFunc, st *SymbolTable) []Validation
 	}
 
 	return errs
+}
+
+// validateCallInputTypes는 @call inputs의 필드 타입을 func Request struct 필드 타입과 비교한다.
+func validateCallInputTypes(sf parser.ServiceFunc, st *SymbolTable) []ValidationError {
+	if st == nil {
+		return nil
+	}
+
+	// result 변수 → 모델명 매핑 (DDL 타입 추적용)
+	resultModels := map[string]string{}
+	for _, seq := range sf.Sequences {
+		if seq.Result != nil && seq.Model != "" {
+			parts := strings.SplitN(seq.Model, ".", 2)
+			resultModels[seq.Result.Var] = parts[0]
+		}
+	}
+
+	var errs []ValidationError
+	for i, seq := range sf.Sequences {
+		if seq.Type != parser.SeqCall || seq.Model == "" {
+			continue
+		}
+		parts := strings.SplitN(seq.Model, ".", 2)
+		if len(parts) < 2 {
+			continue
+		}
+		pkgName, funcName := parts[0], parts[1]
+
+		// pkg.Model 키로 심볼 테이블에서 ParamTypes 조회
+		// @call은 func이므로 모델 키를 찾아야 함
+		var paramTypes map[string]string
+		for modelKey, ms := range st.Models {
+			if !strings.HasPrefix(modelKey, pkgName+".") {
+				continue
+			}
+			if mi, ok := ms.Methods[funcName]; ok && mi.ParamTypes != nil {
+				paramTypes = mi.ParamTypes
+				break
+			}
+		}
+		if paramTypes == nil {
+			continue // Request struct가 파싱되지 않았으면 스킵
+		}
+
+		ctx := errCtx{sf.FileName, sf.Name, i}
+		for key, val := range seq.Inputs {
+			expectedType, ok := paramTypes[key]
+			if !ok {
+				continue // 필드가 Request struct에 없으면 다른 검증에서 처리
+			}
+			actualType := resolveCallInputType(val, resultModels, st)
+			if actualType != "" && actualType != expectedType {
+				errs = append(errs, ctx.err("@call", fmt.Sprintf("입력 %q의 타입 불일치: %s은 %s, Request 필드는 %s", key, val, actualType, expectedType)))
+			}
+		}
+	}
+	return errs
+}
+
+// resolveCallInputType는 @call input value에서 Go 타입을 결정한다.
+func resolveCallInputType(val string, resultModels map[string]string, st *SymbolTable) string {
+	// 리터럴
+	if strings.HasPrefix(val, `"`) {
+		return "string"
+	}
+	// config → string
+	if strings.HasPrefix(val, "config.") {
+		return "string"
+	}
+
+	dotIdx := strings.IndexByte(val, '.')
+	if dotIdx < 0 {
+		return ""
+	}
+	source := val[:dotIdx]
+	field := val[dotIdx+1:]
+
+	// currentUser → 현재는 타입 추적 불가, 스킵
+	if source == "currentUser" {
+		return ""
+	}
+	// request → DDL에서 역추적
+	if source == "request" {
+		snakeName := toSnakeCase(field)
+		for _, table := range st.DDLTables {
+			if goType, ok := table.Columns[snakeName]; ok {
+				return goType
+			}
+		}
+		return ""
+	}
+	// 변수.Field → 해당 변수의 모델 테이블에서 Field 컬럼 타입
+	modelName, ok := resultModels[source]
+	if !ok {
+		return ""
+	}
+	tableName := toSnakeCase(modelName) + "s"
+	snakeName := toSnakeCase(field)
+	if table, ok := st.DDLTables[tableName]; ok {
+		if goType, ok := table.Columns[snakeName]; ok {
+			return goType
+		}
+	}
+	// ID 패턴 fallback
+	if strings.HasSuffix(field, "ID") {
+		refModel := field[:len(field)-2]
+		refTable := toSnakeCase(refModel) + "s"
+		if table, ok := st.DDLTables[refTable]; ok {
+			if goType, ok := table.Columns["id"]; ok {
+				return goType
+			}
+		}
+	}
+	return ""
 }
 
 // goReservedWords는 Go 예약어 25개다.

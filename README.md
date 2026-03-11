@@ -121,7 +121,7 @@ ssac validate specs/backend/service  # Internal validation only
 Generated code uses **gin** framework (`func Name(c *gin.Context)`):
 - Path params: `c.Param()` + type conversion
 - Request body: `c.ShouldBindJSON(&req)` (2+ params, or 1+ in POST/PUT) or `c.Query()`
-- currentUser: `c.MustGet("currentUser").(*model.CurrentUser)` — auto-generated when needed
+- currentUser: `c.MustGet("currentUser").(*model.CurrentUser)` — auto-generated when inputs reference `currentUser.*`
 - Error responses: `c.JSON(status, gin.H{"error": "msg"})` with early return
 - Success responses: `c.JSON(http.StatusOK, gin.H{...})` with field mapping from `@response`
 
@@ -143,11 +143,14 @@ When external SSOT (symbol table) is available, `ssac gen` adds:
 - **Domain folder structure**: `service/<domain>/*.go` required (flat service/*.go is ERROR). `service/auth/login.go` → outputs to `outDir/auth/login.go` with `package auth`
 - **@call codegen**: `pkg.Func(pkg.FuncRequest{Key: value, ...})`. No result → `_, err` guard-style (401), with result → value-style (500)
 - **@state codegen**: `err := {id}state.CanTransition({id}state.Input{...}, "transition")` (returns error, not bool)
-- **@auth codegen**: `authz.Check(currentUser, "action", "resource", authz.Input{...})`
+- **@auth codegen**: `authz.Check(authz.CheckRequest{Action: "action", Resource: "resource", ...})` (403). `currentUser` auto-extracted only when inputs reference `currentUser.*`
 - **Spec file imports**: Go import declarations in spec files are passed to generated code
 - **Package prefix model**: `pkg.Model.Method({...})` — non-DDL models validated against Go interface. Missing interface → WARNING, missing method → ERROR with available methods. Parameter matching: SSaC keys ↔ interface params (`context.Context` excluded). Excluded from `models_gen.go`
 - **@publish codegen**: `queue.Publish(c.Request.Context(), "topic", map[string]any{...})`. Options: `queue.WithDelay()`, `queue.WithPriority()`. Import `"queue"` auto-added
 - **@subscribe codegen**: `func Name(ctx context.Context, message T) error` — separate from gin handler. Message type is Go struct in .ssac file. Errors → `return fmt.Errorf(...)`. Validation: param required, struct/field existence checked
+- **@call input type validation**: @call inputs field types compared against func Request struct field types. DDL-traced type != Request type → ERROR
+- **Unused variable `_` handling**: Result variables not referenced in subsequent sequences → `_, err :=` instead of `varName, err :=`
+- **config.* codegen**: `config.SMTPHost` → `config.Get("SMTP_HOST")`. PascalCase → UPPER_SNAKE_CASE. Import `"config"` auto-added
 
 ## OpenAPI x- Extensions
 
@@ -211,7 +214,7 @@ files/                           # Design documents
 go test ./parser/... ./validator/... ./generator/... -count=1
 ```
 
-146 tests: parser 39 + validator 72 + generator 35
+148 tests: parser 41 + validator 65 + generator 42
 
 ## License
 

@@ -104,6 +104,7 @@ func (g *GoTarget) generateHTTPFunc(sf parser.ServiceFunc, st *validator.SymbolT
 	errDeclared := hasConversionErr(requestParams)
 	declaredVars := map[string]bool{}
 	funcHasTotal := false
+	usedVars := collectUsedVars(sf.Sequences)
 	for i, seq := range sf.Sequences {
 		data := buildTemplateData(seq, &errDeclared, declaredVars, resultTypes, st, sf.Name)
 		if data.HasTotal {
@@ -111,6 +112,10 @@ func (g *GoTarget) generateHTTPFunc(sf parser.ServiceFunc, st *validator.SymbolT
 		}
 		if seq.Type == parser.SeqResponse {
 			data.HasTotal = funcHasTotal
+		}
+		// 미사용 변수 처리
+		if seq.Result != nil && !usedVars[seq.Result.Var] {
+			data.Unused = true
 		}
 
 		tmplName := templateName(seq)
@@ -162,8 +167,13 @@ func (g *GoTarget) generateSubscribeFunc(sf parser.ServiceFunc, st *validator.Sy
 
 	errDeclared := false
 	declaredVars := map[string]bool{}
+	usedVars := collectUsedVars(sf.Sequences)
 	for i, seq := range sf.Sequences {
 		data := buildTemplateData(seq, &errDeclared, declaredVars, resultTypes, st, sf.Name)
+		// 미사용 변수 처리
+		if seq.Result != nil && !usedVars[seq.Result.Var] {
+			data.Unused = true
+		}
 		tmplName := subscribeTemplateName(seq)
 		var seqBuf bytes.Buffer
 		if err := goTemplates.ExecuteTemplate(&seqBuf, tmplName, data); err != nil {
@@ -217,6 +227,9 @@ func collectSubscribeImports(sf parser.ServiceFunc) []string {
 	}
 	if needsCurrentUser(sf.Sequences) {
 		seen["model"] = true
+	}
+	if needsConfig(sf.Sequences) {
+		seen["config"] = true
 	}
 	for _, imp := range sf.Imports {
 		seen[imp] = true
@@ -303,6 +316,9 @@ type templateData struct {
 
 	// reassign: result var already declared → use = instead of :=
 	ReAssign bool
+
+	// unused: result var not referenced later → use _ instead of var name
+	Unused bool
 }
 
 func buildTemplateData(seq parser.Sequence, errDeclared *bool, declaredVars map[string]bool, resultTypes map[string]string, st *validator.SymbolTable, funcName string) templateData {
@@ -486,7 +502,11 @@ func inputValueToCode(val string) string {
 	if strings.HasPrefix(val, "request.") {
 		return lcFirst(val[len("request."):])
 	}
-	// currentUser.Field, config.Field, 일반 변수 → 그대로
+	if strings.HasPrefix(val, "config.") {
+		key := val[len("config."):]
+		return `config.Get("` + toUpperSnake(key) + `")`
+	}
+	// currentUser.Field, 일반 변수 → 그대로
 	return val
 }
 
@@ -786,6 +806,9 @@ func collectImports(sf parser.ServiceFunc, reqParams []typedRequestParam, pathPa
 	if needsCU {
 		seen["model"] = true
 	}
+	if needsConfig(sf.Sequences) {
+		seen["config"] = true
+	}
 
 	var imports []string
 	order := []string{"net/http", "strconv", "time"}
@@ -812,9 +835,6 @@ func collectImports(sf parser.ServiceFunc, reqParams []typedRequestParam, pathPa
 
 func needsCurrentUser(seqs []parser.Sequence) bool {
 	for _, seq := range seqs {
-		if seq.Type == parser.SeqAuth {
-			return true
-		}
 		for _, a := range seq.Args {
 			if a.Source == "currentUser" {
 				return true
@@ -827,6 +847,49 @@ func needsCurrentUser(seqs []parser.Sequence) bool {
 		}
 	}
 	return false
+}
+
+// collectUsedVars는 시퀀스에서 참조되는 변수명을 수집한다.
+func collectUsedVars(seqs []parser.Sequence) map[string]bool {
+	used := map[string]bool{}
+	for _, seq := range seqs {
+		// Guard Target
+		if seq.Target != "" {
+			used[rootVar(seq.Target)] = true
+		}
+		// Inputs values
+		for _, val := range seq.Inputs {
+			if strings.HasPrefix(val, "request.") || strings.HasPrefix(val, "currentUser.") ||
+				strings.HasPrefix(val, "config.") || strings.HasPrefix(val, `"`) || val == "query" {
+				continue
+			}
+			used[rootVar(val)] = true
+		}
+		// Response Fields values
+		for _, val := range seq.Fields {
+			if !strings.HasPrefix(val, `"`) {
+				used[rootVar(val)] = true
+			}
+		}
+	}
+	return used
+}
+
+// needsConfig는 시퀀스에 config 참조가 있는지 확인한다.
+func needsConfig(seqs []parser.Sequence) bool {
+	for _, seq := range seqs {
+		for _, val := range seq.Inputs {
+			if strings.HasPrefix(val, "config.") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// toUpperSnake는 PascalCase를 UPPER_SNAKE_CASE로 변환한다.
+func toUpperSnake(s string) string {
+	return strings.ToUpper(toSnakeCase(s))
 }
 
 func needsQueryOpts(sf parser.ServiceFunc, st *validator.SymbolTable) bool {

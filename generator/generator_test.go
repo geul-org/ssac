@@ -110,10 +110,11 @@ func TestGenerateAuth(t *testing.T) {
 		},
 	}
 	code := mustGenerate(t, sf, nil)
-	assertContains(t, code, `authz.Check(currentUser, "delete", "project", authz.Input{`)
+	assertContains(t, code, `authz.Check(authz.CheckRequest{Action: "delete", Resource: "project"`)
 	assertContains(t, code, `ID: project.ID`)
 	assertContains(t, code, `Owner: project.OwnerID`)
-	assertContains(t, code, `currentUser := c.MustGet("currentUser")`)
+	assertContains(t, code, `http.StatusForbidden`)
+	assertNotContains(t, code, `authz.Input{`)
 }
 
 func TestGenerateCallWithResult(t *testing.T) {
@@ -292,7 +293,7 @@ func TestGenerateFullExample(t *testing.T) {
 	code := mustGenerate(t, sf, nil)
 
 	// auth
-	assertContains(t, code, `authz.Check(currentUser`)
+	assertContains(t, code, `authz.Check(authz.CheckRequest{`)
 	// get
 	assertContains(t, code, `reservation, err := reservationModel.FindByID`)
 	// empty
@@ -336,6 +337,7 @@ func TestGenerateAuthInputsRequestConversion(t *testing.T) {
 	// request.RoomID → roomID
 	assertContains(t, code, `ID: roomID`)
 	assertNotContains(t, code, `request.RoomID`)
+	assertContains(t, code, `authz.CheckRequest{`)
 }
 
 func TestGenerateLiteralArg(t *testing.T) {
@@ -665,6 +667,118 @@ func TestGenerateSubscribeEmpty(t *testing.T) {
 	code := mustGenerate(t, sf, nil)
 	assertContains(t, code, `return fmt.Errorf("사용자 없음")`)
 	assertNotContains(t, code, "c.JSON(http.StatusNotFound")
+}
+
+// --- @auth call style ---
+
+func TestGenerateAuthCallStyle(t *testing.T) {
+	sf := parser.ServiceFunc{
+		Name: "AcceptProposal", FileName: "accept_proposal.go",
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqGet, Model: "Gig.FindByID", Inputs: map[string]string{"ID": "request.GigID"}, Result: &parser.Result{Type: "Gig", Var: "gig"}},
+			{Type: parser.SeqAuth, Action: "AcceptProposal", Resource: "gig", Inputs: map[string]string{"UserID": "currentUser.ID", "ResourceID": "gig.ClientID"}, Message: "Not authorized"},
+		},
+	}
+	code := mustGenerate(t, sf, nil)
+	assertContains(t, code, `authz.Check(authz.CheckRequest{Action: "AcceptProposal", Resource: "gig"`)
+	assertContains(t, code, `ResourceID: gig.ClientID`)
+	assertContains(t, code, `UserID: currentUser.ID`)
+	assertContains(t, code, `http.StatusForbidden`)
+	assertNotContains(t, code, `authz.Input{`)
+}
+
+func TestGenerateAuthNoCurrentUser(t *testing.T) {
+	sf := parser.ServiceFunc{
+		Name: "CheckAccess", FileName: "check_access.go",
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqAuth, Action: "read", Resource: "public", Inputs: map[string]string{"Key": "request.APIKey"}, Message: "Forbidden"},
+		},
+	}
+	code := mustGenerate(t, sf, nil)
+	// @auth inputs에 currentUser 없으면 currentUser 추출 코드 없음
+	assertNotContains(t, code, `c.MustGet("currentUser")`)
+	assertContains(t, code, `authz.Check(authz.CheckRequest{`)
+}
+
+func TestGenerateSubscribeAuth(t *testing.T) {
+	sf := parser.ServiceFunc{
+		Name: "OnTest", FileName: "on_test.go",
+		Subscribe: &parser.SubscribeInfo{Topic: "test", MessageType: "TestMsg"},
+		Param:     &parser.ParamInfo{TypeName: "TestMsg", VarName: "message"},
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqAuth, Action: "process", Resource: "order", Inputs: map[string]string{"OrderID": "message.OrderID"}, Message: "Not authorized"},
+		},
+	}
+	code := mustGenerate(t, sf, nil)
+	assertContains(t, code, `authz.Check(authz.CheckRequest{Action: "process", Resource: "order"`)
+	assertContains(t, code, `return fmt.Errorf("Not authorized: %w", err)`)
+	assertNotContains(t, code, "c.JSON")
+}
+
+// --- unused variable _ ---
+
+func TestGenerateUnusedVar(t *testing.T) {
+	sf := parser.ServiceFunc{
+		Name: "ProcessOrder", FileName: "process_order.go",
+		Imports: []string{"myapp/billing"},
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqGet, Model: "Order.FindByID", Inputs: map[string]string{"ID": "request.OrderID"}, Result: &parser.Result{Type: "Order", Var: "order"}},
+			{Type: parser.SeqCall, Model: "billing.HoldEscrow", Inputs: map[string]string{"Amount": "order.Budget"}, Result: &parser.Result{Type: "Escrow", Var: "escrow"}},
+			{Type: parser.SeqResponse, Fields: map[string]string{"order": "order"}},
+		},
+	}
+	code := mustGenerate(t, sf, nil)
+	// escrow는 response에서 미참조 → _
+	assertContains(t, code, `_, err := billing.HoldEscrow(billing.HoldEscrowRequest{`)
+	// order는 response에서 참조 → 변수명 유지
+	assertContains(t, code, `order, err := orderModel.FindByID`)
+}
+
+func TestGenerateUsedVar(t *testing.T) {
+	sf := parser.ServiceFunc{
+		Name: "ProcessOrder", FileName: "process_order.go",
+		Imports: []string{"myapp/billing"},
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqGet, Model: "Order.FindByID", Inputs: map[string]string{"ID": "request.OrderID"}, Result: &parser.Result{Type: "Order", Var: "order"}},
+			{Type: parser.SeqCall, Model: "billing.HoldEscrow", Inputs: map[string]string{"Amount": "order.Budget"}, Result: &parser.Result{Type: "Escrow", Var: "escrow"}},
+			{Type: parser.SeqResponse, Fields: map[string]string{"order": "order", "escrow": "escrow"}},
+		},
+	}
+	code := mustGenerate(t, sf, nil)
+	// escrow는 response에서 참조됨 → 변수명 유지
+	assertContains(t, code, `escrow, err := billing.HoldEscrow(billing.HoldEscrowRequest{`)
+	assertContains(t, code, `order, err := orderModel.FindByID`)
+}
+
+// --- config.Get ---
+
+func TestGenerateConfigGet(t *testing.T) {
+	sf := parser.ServiceFunc{
+		Name: "SendEmail", FileName: "send_email.go",
+		Imports: []string{"myapp/mail"},
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqCall, Model: "mail.SendTemplateEmail", Inputs: map[string]string{"Host": "config.SMTPHost", "Port": "config.SMTPPort", "From": "config.SMTPFrom"}},
+		},
+	}
+	code := mustGenerate(t, sf, nil)
+	assertContains(t, code, `config.Get("SMTP_HOST")`)
+	assertContains(t, code, `config.Get("SMTP_PORT")`)
+	assertContains(t, code, `config.Get("SMTP_FROM")`)
+	assertContains(t, code, `"config"`)
+}
+
+func TestGenerateConfigGetSubscribe(t *testing.T) {
+	sf := parser.ServiceFunc{
+		Name: "OnNotify", FileName: "on_notify.go",
+		Subscribe: &parser.SubscribeInfo{Topic: "notify", MessageType: "Msg"},
+		Param:     &parser.ParamInfo{TypeName: "Msg", VarName: "message"},
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqCall, Model: "mail.Send", Inputs: map[string]string{"From": "config.MailFrom", "To": "message.Email"}},
+		},
+	}
+	code := mustGenerate(t, sf, nil)
+	assertContains(t, code, `config.Get("MAIL_FROM")`)
+	assertContains(t, code, `"config"`)
 }
 
 // --- helpers ---

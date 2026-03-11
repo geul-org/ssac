@@ -55,6 +55,7 @@ ssac validate specs/dummy-study       # 외부 SSOT 교차 검증 (자동 감지
 | 외부 | 패키지 모델 interface 교차 검증 (메서드 없으면 ERROR + 사용 가능 목록) |
 | 외부 | 패키지 모델 파라미터 매칭 (SSaC↔interface 불일치/누락 → ERROR) |
 | 외부 | Go 예약어 파라미터명 (DDL 컬럼이 `type`, `range` 등 → ERROR) |
+| 외부 | @call 입력 타입 검증 (DDL 역추적 타입 ≠ Request struct 필드 타입 → ERROR) |
 
 ### gen
 
@@ -110,7 +111,7 @@ Value 형식: `source.Field` 또는 `"literal"`
 | `request.Name` | HTTP 요청 파라미터 (예약 소스) | `request.CourseID` |
 | `variable.Field` | 이전 결과 변수의 필드 | `course.InstructorID` |
 | `currentUser.Field` | 인증 컨텍스트 (예약 소스) | `currentUser.ID` |
-| `config.Field` | 환경 설정 (예약 소스) | `config.APIKey` |
+| `config.Field` | 환경 설정 (예약 소스) → `config.Get("UPPER_SNAKE")` | `config.SMTPHost` → `config.Get("SMTP_HOST")` |
 | `query` | QueryOpts (페이지네이션/정렬/필터, 예약 소스) | `query` |
 | `"literal"` | 문자열 리터럴 | `"cancelled"` |
 
@@ -323,8 +324,7 @@ import: `"states/reservationstate"`
 
 코드젠:
 ```go
-currentUser := c.MustGet("currentUser").(*model.CurrentUser)
-if err := authz.Check(currentUser, "cancel", "reservation", authz.Input{
+if _, err := authz.Check(authz.CheckRequest{Action: "cancel", Resource: "reservation",
     ID:    reservation.ID,
     Owner: reservation.UserID,
 }); err != nil {
@@ -332,6 +332,8 @@ if err := authz.Check(currentUser, "cancel", "reservation", authz.Input{
     return
 }
 ```
+
+`currentUser`는 inputs에 `currentUser.*`가 참조될 때만 자동 추출된다.
 
 ### @call — 외부 함수 호출
 
@@ -749,6 +751,45 @@ WARNING 예시: put/delete 후 갱신 없이 response에서 이전 변수를 사
 
 ---
 
+## 추가 코드젠 기능
+
+### 미사용 변수 `_` 처리
+
+`@get`/`@post`/`@call` result 변수가 이후 시퀀스(guard target, inputs value, response fields)에서 참조되지 않으면 `_`로 생성한다.
+
+```go
+// escrow가 response에서 미참조:
+_, err := billing.HoldEscrow(billing.HoldEscrowRequest{Amount: order.Budget})
+
+// escrow가 response에서 참조:
+escrow, err := billing.HoldEscrow(billing.HoldEscrowRequest{Amount: order.Budget})
+```
+
+### config.* → config.Get() 코드젠 변환
+
+SSaC에서 `config.Field` 사용 시 generator가 `config.Get("UPPER_SNAKE")` 호출로 변환한다.
+
+```go
+// SSaC:
+// @call mail.Send({Host: config.SMTPHost, Port: config.SMTPPort})
+
+// 생성 코드:
+mail.Send(mail.SendRequest{Host: config.Get("SMTP_HOST"), Port: config.Get("SMTP_PORT")})
+```
+
+PascalCase → UPPER_SNAKE_CASE 변환 규칙: 대문자 앞에 `_` 삽입 후 전체 대문자화 (연속 대문자 그룹은 하나로 유지: `SMTP` → `SMTP`).
+config 참조가 있으면 import에 `"config"` 자동 추가.
+
+### @call 입력 타입 검증
+
+`@call` inputs의 필드 타입을 func Request struct 필드 타입과 비교한다. DDL에서 역추적한 타입과 Request struct 타입이 불일치하면 ERROR.
+
+```
+ERROR: @call 입력 "Amount"의 타입 불일치: gig.Budget은 int64, Request 필드는 int
+```
+
+---
+
 ## 전체 예시
 
 ### spec 파일
@@ -797,7 +838,7 @@ func CancelReservation(c *gin.Context) {
 
     // auth
     currentUser := c.MustGet("currentUser").(*model.CurrentUser)
-    if err := authz.Check(currentUser, "cancel", "reservation", authz.Input{
+    if _, err := authz.Check(authz.CheckRequest{Action: "cancel", Resource: "reservation",
         ID: reservationID,
     }); err != nil {
         c.JSON(http.StatusForbidden, gin.H{"error": "권한 없음"})

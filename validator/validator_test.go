@@ -1133,6 +1133,66 @@ func TestValidateGoReservedWordNoConflict(t *testing.T) {
 	assertNoErrors(t, errs)
 }
 
+// --- 외부 검증: @call 입력 타입 검증 ---
+
+func TestValidateCallInputTypeMismatch(t *testing.T) {
+	st := &SymbolTable{
+		Models: map[string]ModelSymbol{
+			"billing.Billing": {Methods: map[string]MethodInfo{
+				"HoldEscrow": {
+					Params:     []string{"req"},
+					ParamTypes: map[string]string{"Amount": "int", "GigID": "int64"},
+				},
+			}},
+		},
+		Operations: map[string]OperationSymbol{},
+		DDLTables: map[string]DDLTable{
+			"gigs": {Columns: map[string]string{"id": "int64", "budget": "int64"}},
+		},
+	}
+	funcs := []parser.ServiceFunc{{
+		Name: "ProcessGig", FileName: "process_gig.go",
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqGet, Model: "Gig.FindByID", Inputs: map[string]string{"ID": "request.GigID"}, Result: &parser.Result{Type: "Gig", Var: "gig"}},
+			{Type: parser.SeqCall, Model: "billing.HoldEscrow", Inputs: map[string]string{"Amount": "gig.Budget", "GigID": "gig.ID"}},
+		},
+	}}
+	errs := ValidateWithSymbols(funcs, st)
+	// gig.Budget은 int64, Request Amount는 int → 불일치
+	assertHasError(t, errs, `타입 불일치`)
+	assertHasError(t, errs, `int64`)
+}
+
+func TestValidateCallInputTypeMatch(t *testing.T) {
+	st := &SymbolTable{
+		Models: map[string]ModelSymbol{
+			"billing.Billing": {Methods: map[string]MethodInfo{
+				"HoldEscrow": {
+					Params:     []string{"req"},
+					ParamTypes: map[string]string{"Amount": "int64", "GigID": "int64"},
+				},
+			}},
+		},
+		Operations: map[string]OperationSymbol{},
+		DDLTables: map[string]DDLTable{
+			"gigs": {Columns: map[string]string{"id": "int64", "budget": "int64"}},
+		},
+	}
+	funcs := []parser.ServiceFunc{{
+		Name: "ProcessGig", FileName: "process_gig.go",
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqGet, Model: "Gig.FindByID", Inputs: map[string]string{"ID": "request.GigID"}, Result: &parser.Result{Type: "Gig", Var: "gig"}},
+			{Type: parser.SeqCall, Model: "billing.HoldEscrow", Inputs: map[string]string{"Amount": "gig.Budget", "GigID": "gig.ID"}},
+		},
+	}}
+	errs := ValidateWithSymbols(funcs, st)
+	for _, e := range errs {
+		if contains(e.Message, "타입 불일치") {
+			t.Errorf("unexpected type mismatch error: %s", e.Message)
+		}
+	}
+}
+
 func TestValidateGoReservedWordRange(t *testing.T) {
 	st := &SymbolTable{
 		Models:     map[string]ModelSymbol{"Schedule": {Methods: map[string]MethodInfo{"Create": {Cardinality: "exec"}}}},
