@@ -340,11 +340,11 @@ func buildTemplateData(seq parser.Sequence, errDeclared *bool, declaredVars map[
 		if seq.Type == parser.SeqCall {
 			d.PkgName = parts[0]
 			if len(parts) > 1 {
-				d.FuncMethod = ucFirst(parts[1])
+				d.FuncMethod = strcase.ToGoPascal(parts[1])
 			}
 		} else {
 			// 패키지 접두사 모델이든 일반 모델이든 동일: modelName + "Model." + method
-			d.ModelCall = lcFirst(parts[0]) + "Model." + parts[1]
+			d.ModelCall = strcase.ToGoCamel(parts[0]) + "Model." + parts[1]
 		}
 	}
 
@@ -1133,7 +1133,7 @@ func deriveInterfaces(usages []modelUsage, st *validator.SymbolTable) []derivedI
 
 func resolveArgParamName(a parser.Arg) string {
 	if a.Literal != "" {
-		return lcFirst(a.Literal) // 리터럴은 값 자체를 이름으로 사용
+		return strcase.ToGoCamel(a.Literal) // 리터럴은 값 자체를 이름으로 사용
 	}
 	if a.Source == "request" || a.Source == "currentUser" {
 		return strcase.ToGoCamel(a.Field)
