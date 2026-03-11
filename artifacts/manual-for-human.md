@@ -54,6 +54,7 @@ ssac validate specs/dummy-study       # 외부 SSOT 교차 검증 (자동 감지
 | 외부 | Stale 데이터 경고 (put/delete 후 재조회 없이 response 사용) |
 | 외부 | 패키지 모델 interface 교차 검증 (메서드 없으면 ERROR + 사용 가능 목록) |
 | 외부 | 패키지 모델 파라미터 매칭 (SSaC↔interface 불일치/누락 → ERROR) |
+| 외부 | Go 예약어 파라미터명 (DDL 컬럼이 `type`, `range` 등 → ERROR) |
 
 ### gen
 

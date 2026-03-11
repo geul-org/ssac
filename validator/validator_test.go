@@ -924,3 +924,59 @@ func TestValidateResponseDirectPageFieldsMissing(t *testing.T) {
 	errs := ValidateWithSymbols(funcs, st)
 	assertHasError(t, errs, `"items" 필드가 없습니다`)
 }
+
+// --- 외부 검증: Go 예약어 ---
+
+func TestValidateGoReservedWordInInputs(t *testing.T) {
+	st := &SymbolTable{
+		Models:     map[string]ModelSymbol{"Transaction": {Methods: map[string]MethodInfo{"Create": {Cardinality: "exec"}}}},
+		Operations: map[string]OperationSymbol{},
+		DDLTables: map[string]DDLTable{
+			"transactions": {Columns: map[string]string{"type": "string", "amount": "int64", "gig_id": "int64"}},
+		},
+	}
+	funcs := []parser.ServiceFunc{{
+		Name: "CreateTransaction", FileName: "create_transaction.go",
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqPost, Model: "Transaction.Create", Inputs: map[string]string{"amount": "request.Amount", "gigID": "request.GigID", "type": "request.Type"}, Result: &parser.Result{Type: "Transaction", Var: "tx"}},
+		},
+	}}
+	errs := ValidateWithSymbols(funcs, st)
+	assertHasError(t, errs, `DDL column "type" in table "transactions" is a Go reserved word`)
+}
+
+func TestValidateGoReservedWordNoConflict(t *testing.T) {
+	st := &SymbolTable{
+		Models:     map[string]ModelSymbol{"Transaction": {Methods: map[string]MethodInfo{"Create": {Cardinality: "exec"}}}},
+		Operations: map[string]OperationSymbol{},
+		DDLTables: map[string]DDLTable{
+			"transactions": {Columns: map[string]string{"tx_type": "string", "amount": "int64"}},
+		},
+	}
+	funcs := []parser.ServiceFunc{{
+		Name: "CreateTransaction", FileName: "create_transaction.go",
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqPost, Model: "Transaction.Create", Inputs: map[string]string{"amount": "request.Amount", "txType": "request.TxType"}, Result: &parser.Result{Type: "Transaction", Var: "tx"}},
+		},
+	}}
+	errs := ValidateWithSymbols(funcs, st)
+	assertNoErrors(t, errs)
+}
+
+func TestValidateGoReservedWordRange(t *testing.T) {
+	st := &SymbolTable{
+		Models:     map[string]ModelSymbol{"Schedule": {Methods: map[string]MethodInfo{"Create": {Cardinality: "exec"}}}},
+		Operations: map[string]OperationSymbol{},
+		DDLTables: map[string]DDLTable{
+			"schedules": {Columns: map[string]string{"range": "string", "name": "string"}},
+		},
+	}
+	funcs := []parser.ServiceFunc{{
+		Name: "CreateSchedule", FileName: "create_schedule.go",
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqPost, Model: "Schedule.Create", Inputs: map[string]string{"range": "request.Range", "name": "request.Name"}, Result: &parser.Result{Type: "Schedule", Var: "schedule"}},
+		},
+	}}
+	errs := ValidateWithSymbols(funcs, st)
+	assertHasError(t, errs, `DDL column "range" in table "schedules" is a Go reserved word`)
+}

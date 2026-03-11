@@ -27,6 +27,7 @@ func ValidateWithSymbols(funcs []parser.ServiceFunc, st *SymbolTable) []Validati
 		errs = append(errs, validateQueryUsage(sf, st)...)
 		errs = append(errs, validatePaginationType(sf, st)...)
 	}
+	errs = append(errs, validateGoReservedWords(funcs, st)...)
 	return errs
 }
 
@@ -549,6 +550,105 @@ func validatePaginationType(sf parser.ServiceFunc, st *SymbolTable) []Validation
 	}
 
 	return errs
+}
+
+// goReservedWords는 Go 예약어 25개다.
+var goReservedWords = map[string]bool{
+	"break": true, "case": true, "chan": true, "const": true,
+	"continue": true, "default": true, "defer": true, "else": true,
+	"fallthrough": true, "for": true, "func": true, "go": true,
+	"goto": true, "if": true, "import": true, "interface": true,
+	"map": true, "package": true, "range": true, "return": true,
+	"select": true, "struct": true, "switch": true, "type": true,
+	"var": true,
+}
+
+// validateGoReservedWords는 SSaC Inputs 키가 Go 예약어와 충돌하면 ERROR를 반환한다.
+func validateGoReservedWords(funcs []parser.ServiceFunc, st *SymbolTable) []ValidationError {
+	var errs []ValidationError
+	seen := map[string]bool{} // 중복 에러 방지: "table.column"
+
+	for _, sf := range funcs {
+		for i, seq := range sf.Sequences {
+			if seq.Package != "" || seq.Type == parser.SeqCall {
+				continue // 패키지 모델과 @call은 models_gen.go 대상 아님
+			}
+			for key := range seq.Inputs {
+				paramName := toLowerFirst(key)
+				if !goReservedWords[paramName] {
+					continue
+				}
+				// DDL 테이블에서 컬럼 역추적
+				snakeName := toSnakeCase(key)
+				tableName, found := findColumnTable(snakeName, seq.Model, st)
+				ctx := errCtx{sf.FileName, sf.Name, i}
+				dedup := tableName + "." + snakeName
+				if seen[dedup] {
+					continue
+				}
+				seen[dedup] = true
+				if found {
+					errs = append(errs, ctx.err("@"+seq.Type, fmt.Sprintf("DDL column %q in table %q is a Go reserved word — rename the column (e.g. %q)", snakeName, tableName, "tx_"+snakeName)))
+				} else {
+					errs = append(errs, ctx.err("@"+seq.Type, fmt.Sprintf("parameter name %q is a Go reserved word — rename the DDL column", paramName)))
+				}
+			}
+		}
+	}
+	return errs
+}
+
+// toLowerFirst는 첫 글자를 소문자로 변환한다.
+func toLowerFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToLower(s[:1]) + s[1:]
+}
+
+// toSnakeCase는 PascalCase/camelCase를 snake_case로 변환한다.
+func toSnakeCase(s string) string {
+	var result []byte
+	for i, c := range s {
+		if c >= 'A' && c <= 'Z' {
+			if i > 0 {
+				prev := s[i-1]
+				if prev >= 'a' && prev <= 'z' {
+					result = append(result, '_')
+				} else if prev >= 'A' && prev <= 'Z' && i+1 < len(s) && s[i+1] >= 'a' && s[i+1] <= 'z' {
+					result = append(result, '_')
+				}
+			}
+			result = append(result, byte(c)+32)
+		} else {
+			result = append(result, byte(c))
+		}
+	}
+	return string(result)
+}
+
+// findColumnTable는 snake_case 컬럼명이 존재하는 DDL 테이블을 찾는다.
+func findColumnTable(snakeCol, model string, st *SymbolTable) (string, bool) {
+	if st == nil {
+		return "", false
+	}
+	// 모델명에서 테이블명 유추: "Transaction.Create" → "transactions"
+	if model != "" {
+		parts := strings.SplitN(model, ".", 2)
+		tableName := toSnakeCase(parts[0]) + "s"
+		if table, ok := st.DDLTables[tableName]; ok {
+			if _, ok := table.Columns[snakeCol]; ok {
+				return tableName, true
+			}
+		}
+	}
+	// 전체 DDL 테이블에서 검색
+	for tableName, table := range st.DDLTables {
+		if _, ok := table.Columns[snakeCol]; ok {
+			return tableName, true
+		}
+	}
+	return "", false
 }
 
 // reservedSources는 사용자가 result 변수명으로 사용할 수 없는 예약 소스다.
