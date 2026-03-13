@@ -11,8 +11,6 @@ import (
 
 // generateHTTPFunc는 HTTP 핸들러 함수를 생성한다.
 func (g *GoTarget) generateHTTPFunc(sf parser.ServiceFunc, st *validator.SymbolTable) ([]byte, error) {
-	var buf bytes.Buffer
-
 	// 분석
 	pathParams := getPathParams(sf.Name, st)
 	pathParamSet := map[string]bool{}
@@ -23,69 +21,53 @@ func (g *GoTarget) generateHTTPFunc(sf parser.ServiceFunc, st *validator.SymbolT
 	requestParams := collectRequestParams(sf.Sequences, st, pathParamSet)
 	needsCU := needsCurrentUser(sf.Sequences)
 	needsQO := needsQueryOpts(sf, st)
-	imports := collectImports(sf, requestParams, pathParams, needsCU, needsQO)
 
-	// package
 	pkgName := "service"
 	if sf.Domain != "" {
 		pkgName = sf.Domain
 	}
-	buf.WriteString("package " + pkgName + "\n\n")
 
-	// imports
-	if len(imports) > 0 {
-		buf.WriteString("import (\n")
-		for _, imp := range imports {
-			fmt.Fprintf(&buf, "\t%q\n", imp)
-		}
-		buf.WriteString(")\n\n")
-	}
+	// 1. 함수 본문 생성
+	var bodyBuf bytes.Buffer
 
-	// func signature
-	fmt.Fprintf(&buf, "func (h *Handler) %s(c *gin.Context) {\n", sf.Name)
+	fmt.Fprintf(&bodyBuf, "func (h *Handler) %s(c *gin.Context) {\n", sf.Name)
 
-	// path parameters
 	for _, pp := range pathParams {
-		buf.WriteString(generatePathParamCode(pp))
+		bodyBuf.WriteString(generatePathParamCode(pp))
 	}
 	if len(pathParams) > 0 {
-		buf.WriteString("\n")
+		bodyBuf.WriteString("\n")
 	}
 
-	// currentUser
 	if needsCU {
 		var cuBuf bytes.Buffer
 		goTemplates.ExecuteTemplate(&cuBuf, "currentUser", nil)
-		buf.Write(cuBuf.Bytes())
-		buf.WriteString("\n")
+		bodyBuf.Write(cuBuf.Bytes())
+		bodyBuf.WriteString("\n")
 	}
 
-	// request parameters
 	for _, rp := range requestParams {
-		buf.WriteString(rp.extractCode)
+		bodyBuf.WriteString(rp.extractCode)
 	}
 	if len(requestParams) > 0 {
-		buf.WriteString("\n")
+		bodyBuf.WriteString("\n")
 	}
 
-	// QueryOpts
 	if needsQO {
-		buf.WriteString(generateQueryOptsCode(sf.Name, st))
-		buf.WriteString("\n")
+		bodyBuf.WriteString(generateQueryOptsCode(sf.Name, st))
+		bodyBuf.WriteString("\n")
 	}
 
-	// Transaction
 	useTx := hasWriteSequence(sf.Sequences)
 	if useTx {
-		buf.WriteString("\ttx, err := h.DB.BeginTx(c.Request.Context(), nil)\n")
-		buf.WriteString("\tif err != nil {\n")
-		buf.WriteString("\t\tc.JSON(http.StatusInternalServerError, gin.H{\"error\": \"transaction failed\"})\n")
-		buf.WriteString("\t\treturn\n")
-		buf.WriteString("\t}\n")
-		buf.WriteString("\tdefer tx.Rollback()\n\n")
+		bodyBuf.WriteString("\ttx, err := h.DB.BeginTx(c.Request.Context(), nil)\n")
+		bodyBuf.WriteString("\tif err != nil {\n")
+		bodyBuf.WriteString("\t\tc.JSON(http.StatusInternalServerError, gin.H{\"error\": \"transaction failed\"})\n")
+		bodyBuf.WriteString("\t\treturn\n")
+		bodyBuf.WriteString("\t}\n")
+		bodyBuf.WriteString("\tdefer tx.Rollback()\n\n")
 	}
 
-	// result types for guard checks
 	resultTypes := map[string]string{}
 	for _, seq := range sf.Sequences {
 		if seq.Result != nil {
@@ -93,7 +75,6 @@ func (g *GoTarget) generateHTTPFunc(sf parser.ServiceFunc, st *validator.SymbolT
 		}
 	}
 
-	// sequences
 	errDeclared := hasConversionErr(requestParams)
 	if useTx {
 		errDeclared = true
@@ -104,10 +85,10 @@ func (g *GoTarget) generateHTTPFunc(sf parser.ServiceFunc, st *validator.SymbolT
 	committed := false
 	for i, seq := range sf.Sequences {
 		if useTx && seq.Type == parser.SeqResponse && !committed {
-			buf.WriteString("\tif err = tx.Commit(); err != nil {\n")
-			buf.WriteString("\t\tc.JSON(http.StatusInternalServerError, gin.H{\"error\": \"commit failed\"})\n")
-			buf.WriteString("\t\treturn\n")
-			buf.WriteString("\t}\n\n")
+			bodyBuf.WriteString("\tif err = tx.Commit(); err != nil {\n")
+			bodyBuf.WriteString("\t\tc.JSON(http.StatusInternalServerError, gin.H{\"error\": \"commit failed\"})\n")
+			bodyBuf.WriteString("\t\treturn\n")
+			bodyBuf.WriteString("\t}\n\n")
 			committed = true
 		}
 		data := buildTemplateData(seq, &errDeclared, declaredVars, resultTypes, st, sf.Name, useTx)
@@ -117,11 +98,10 @@ func (g *GoTarget) generateHTTPFunc(sf parser.ServiceFunc, st *validator.SymbolT
 		if seq.Type == parser.SeqResponse {
 			data.HasTotal = funcHasTotal
 		}
-		// 미사용 변수 처리
 		if seq.Result != nil && !usedVars[seq.Result.Var] {
 			data.Unused = true
 			if data.ErrDeclared {
-				data.ReAssign = true // _, err = (no new vars with :=)
+				data.ReAssign = true
 			}
 		}
 
@@ -130,18 +110,34 @@ func (g *GoTarget) generateHTTPFunc(sf parser.ServiceFunc, st *validator.SymbolT
 		if err := goTemplates.ExecuteTemplate(&seqBuf, tmplName, data); err != nil {
 			return nil, fmt.Errorf("sequence[%d] %s 템플릿 실행 실패: %w", i, seq.Type, err)
 		}
-		buf.Write(seqBuf.Bytes())
-		buf.WriteString("\n")
+		bodyBuf.Write(seqBuf.Bytes())
+		bodyBuf.WriteString("\n")
 	}
 
 	if useTx && !committed {
-		buf.WriteString("\tif err = tx.Commit(); err != nil {\n")
-		buf.WriteString("\t\tc.JSON(http.StatusInternalServerError, gin.H{\"error\": \"commit failed\"})\n")
-		buf.WriteString("\t\treturn\n")
-		buf.WriteString("\t}\n\n")
+		bodyBuf.WriteString("\tif err = tx.Commit(); err != nil {\n")
+		bodyBuf.WriteString("\t\tc.JSON(http.StatusInternalServerError, gin.H{\"error\": \"commit failed\"})\n")
+		bodyBuf.WriteString("\t\treturn\n")
+		bodyBuf.WriteString("\t}\n\n")
 	}
 
-	buf.WriteString("}\n")
+	bodyBuf.WriteString("}\n")
+
+	// 2. 후보 import 수집 → 본문 기준 필터링
+	imports := collectImports(sf, requestParams, pathParams, needsCU, needsQO)
+	imports = filterUsedImports(imports, bodyBuf.String())
+
+	// 3. 최종 조립
+	var buf bytes.Buffer
+	buf.WriteString("package " + pkgName + "\n\n")
+	if len(imports) > 0 {
+		buf.WriteString("import (\n")
+		for _, imp := range imports {
+			fmt.Fprintf(&buf, "\t%q\n", imp)
+		}
+		buf.WriteString(")\n\n")
+	}
+	buf.Write(bodyBuf.Bytes())
 
 	formatted, err := format.Source(buf.Bytes())
 	if err != nil {
@@ -152,25 +148,16 @@ func (g *GoTarget) generateHTTPFunc(sf parser.ServiceFunc, st *validator.SymbolT
 
 // generateSubscribeFunc는 큐 구독 핸들러 함수를 생성한다.
 func (g *GoTarget) generateSubscribeFunc(sf parser.ServiceFunc, st *validator.SymbolTable) ([]byte, error) {
-	var buf bytes.Buffer
-
 	pkgName := "service"
 	if sf.Domain != "" {
 		pkgName = sf.Domain
 	}
-	buf.WriteString("package " + pkgName + "\n\n")
 
-	imports := collectSubscribeImports(sf)
-	if len(imports) > 0 {
-		buf.WriteString("import (\n")
-		for _, imp := range imports {
-			fmt.Fprintf(&buf, "\t%q\n", imp)
-		}
-		buf.WriteString(")\n\n")
-	}
+	// 1. 함수 본문 생성
+	var bodyBuf bytes.Buffer
 
 	msgType := sf.Subscribe.MessageType
-	fmt.Fprintf(&buf, "func (h *Handler) %s(ctx context.Context, message %s) error {\n", sf.Name, msgType)
+	fmt.Fprintf(&bodyBuf, "func (h *Handler) %s(ctx context.Context, message %s) error {\n", sf.Name, msgType)
 
 	resultTypes := map[string]string{}
 	for _, seq := range sf.Sequences {
@@ -181,11 +168,11 @@ func (g *GoTarget) generateSubscribeFunc(sf parser.ServiceFunc, st *validator.Sy
 
 	useTx := hasWriteSequence(sf.Sequences)
 	if useTx {
-		buf.WriteString("\ttx, err := h.DB.BeginTx(ctx, nil)\n")
-		buf.WriteString("\tif err != nil {\n")
-		buf.WriteString("\t\treturn fmt.Errorf(\"transaction failed: %w\", err)\n")
-		buf.WriteString("\t}\n")
-		buf.WriteString("\tdefer tx.Rollback()\n\n")
+		bodyBuf.WriteString("\ttx, err := h.DB.BeginTx(ctx, nil)\n")
+		bodyBuf.WriteString("\tif err != nil {\n")
+		bodyBuf.WriteString("\t\treturn fmt.Errorf(\"transaction failed: %w\", err)\n")
+		bodyBuf.WriteString("\t}\n")
+		bodyBuf.WriteString("\tdefer tx.Rollback()\n\n")
 	}
 
 	errDeclared := useTx
@@ -193,11 +180,10 @@ func (g *GoTarget) generateSubscribeFunc(sf parser.ServiceFunc, st *validator.Sy
 	usedVars := collectUsedVars(sf.Sequences)
 	for i, seq := range sf.Sequences {
 		data := buildTemplateData(seq, &errDeclared, declaredVars, resultTypes, st, sf.Name, useTx)
-		// 미사용 변수 처리
 		if seq.Result != nil && !usedVars[seq.Result.Var] {
 			data.Unused = true
 			if data.ErrDeclared {
-				data.ReAssign = true // _, err = (no new vars with :=)
+				data.ReAssign = true
 			}
 		}
 		tmplName := subscribeTemplateName(seq)
@@ -205,18 +191,34 @@ func (g *GoTarget) generateSubscribeFunc(sf parser.ServiceFunc, st *validator.Sy
 		if err := goTemplates.ExecuteTemplate(&seqBuf, tmplName, data); err != nil {
 			return nil, fmt.Errorf("sequence[%d] %s 템플릿 실행 실패: %w", i, seq.Type, err)
 		}
-		buf.Write(seqBuf.Bytes())
-		buf.WriteString("\n")
+		bodyBuf.Write(seqBuf.Bytes())
+		bodyBuf.WriteString("\n")
 	}
 
 	if useTx {
-		buf.WriteString("\tif err = tx.Commit(); err != nil {\n")
-		buf.WriteString("\t\treturn fmt.Errorf(\"commit failed: %w\", err)\n")
-		buf.WriteString("\t}\n\n")
+		bodyBuf.WriteString("\tif err = tx.Commit(); err != nil {\n")
+		bodyBuf.WriteString("\t\treturn fmt.Errorf(\"commit failed: %w\", err)\n")
+		bodyBuf.WriteString("\t}\n\n")
 	}
 
-	buf.WriteString("\treturn nil\n")
-	buf.WriteString("}\n")
+	bodyBuf.WriteString("\treturn nil\n")
+	bodyBuf.WriteString("}\n")
+
+	// 2. 후보 import 수집 → 본문 기준 필터링
+	imports := collectSubscribeImports(sf)
+	imports = filterUsedImports(imports, bodyBuf.String())
+
+	// 3. 최종 조립
+	var buf bytes.Buffer
+	buf.WriteString("package " + pkgName + "\n\n")
+	if len(imports) > 0 {
+		buf.WriteString("import (\n")
+		for _, imp := range imports {
+			fmt.Fprintf(&buf, "\t%q\n", imp)
+		}
+		buf.WriteString(")\n\n")
+	}
+	buf.Write(bodyBuf.Bytes())
 
 	formatted, err := format.Source(buf.Bytes())
 	if err != nil {

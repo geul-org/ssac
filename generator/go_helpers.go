@@ -288,60 +288,54 @@ func getPathParams(funcName string, st *validator.SymbolTable) []validator.PathP
 }
 
 func generateQueryOptsCode(funcName string, st *validator.SymbolTable) string {
-	var buf bytes.Buffer
-	buf.WriteString("\topts := QueryOpts{}\n")
-
 	if st == nil {
-		return buf.String()
+		return "\topts := model.ParseQueryOpts(c, model.QueryOptsConfig{})\n"
 	}
 
-	// 해당 함수의 OperationSymbol 참조
 	op, hasOp := st.Operations[funcName]
+	if !hasOp {
+		return "\topts := model.ParseQueryOpts(c, model.QueryOptsConfig{})\n"
+	}
 
-	hasPagination := false
-	var sortAllowed []string
-	if hasOp {
-		if op.XPagination != nil {
-			hasPagination = true
-		}
-		if op.XSort != nil {
-			sortAllowed = op.XSort.Allowed
-		}
-	} else {
-		// funcName 매칭 실패 시 전체 순회 fallback
-		for _, o := range st.Operations {
-			if o.XPagination != nil {
-				hasPagination = true
+	var buf bytes.Buffer
+	buf.WriteString("\topts := model.ParseQueryOpts(c, model.QueryOptsConfig{\n")
+
+	if op.XPagination != nil {
+		fmt.Fprintf(&buf, "\t\tPagination: &model.PaginationConfig{Style: %q, DefaultLimit: %d, MaxLimit: %d},\n",
+			op.XPagination.Style, op.XPagination.DefaultLimit, op.XPagination.MaxLimit)
+	}
+	if op.XSort != nil {
+		buf.WriteString("\t\tSort: &model.SortConfig{")
+		if len(op.XSort.Allowed) > 0 {
+			buf.WriteString("Allowed: []string{")
+			for i, col := range op.XSort.Allowed {
+				if i > 0 {
+					buf.WriteString(", ")
+				}
+				fmt.Fprintf(&buf, "%q", col)
 			}
+			buf.WriteString("}")
 		}
+		if op.XSort.Default != "" {
+			fmt.Fprintf(&buf, ", Default: %q", op.XSort.Default)
+		}
+		if op.XSort.Direction != "" {
+			fmt.Fprintf(&buf, ", Direction: %q", op.XSort.Direction)
+		}
+		buf.WriteString("},\n")
 	}
-
-	if hasPagination {
-		buf.WriteString("\tif v := c.Query(\"limit\"); v != \"\" {\n")
-		buf.WriteString("\t\topts.Limit, _ = strconv.Atoi(v)\n")
-		buf.WriteString("\t}\n")
-		buf.WriteString("\tif v := c.Query(\"offset\"); v != \"\" {\n")
-		buf.WriteString("\t\topts.Offset, _ = strconv.Atoi(v)\n")
-		buf.WriteString("\t}\n")
-	}
-	if len(sortAllowed) > 0 {
-		// allowlist 기반 sort 검증
-		buf.WriteString("\tallowedSort := map[string]bool{")
-		for i, col := range sortAllowed {
+	if op.XFilter != nil && len(op.XFilter.Allowed) > 0 {
+		buf.WriteString("\t\tFilter: &model.FilterConfig{Allowed: []string{")
+		for i, col := range op.XFilter.Allowed {
 			if i > 0 {
 				buf.WriteString(", ")
 			}
-			fmt.Fprintf(&buf, "%q: true", col)
+			fmt.Fprintf(&buf, "%q", col)
 		}
-		buf.WriteString("}\n")
-		buf.WriteString("\tif v := c.Query(\"sort\"); allowedSort[v] {\n")
-		buf.WriteString("\t\topts.SortCol = v\n")
-		buf.WriteString("\t}\n")
-		buf.WriteString("\tif v := c.Query(\"direction\"); v == \"asc\" || v == \"desc\" {\n")
-		buf.WriteString("\t\topts.SortDir = v\n")
-		buf.WriteString("\t}\n")
+		buf.WriteString("}},\n")
 	}
 
+	buf.WriteString("\t})\n")
 	return buf.String()
 }
 
@@ -444,6 +438,21 @@ func httpStatusConst(code int) string {
 	default:
 		return fmt.Sprintf("%d", code)
 	}
+}
+
+// filterUsedImports는 생성된 코드 본문에서 실제 참조되는 패키지만 남긴다.
+func filterUsedImports(imports []string, body string) []string {
+	var used []string
+	for _, imp := range imports {
+		pkg := imp
+		if idx := strings.LastIndex(imp, "/"); idx >= 0 {
+			pkg = imp[idx+1:]
+		}
+		if strings.Contains(body, pkg+".") {
+			used = append(used, imp)
+		}
+	}
+	return used
 }
 
 // lookupCallErrStatus는 SymbolTable에서 @call 대상 함수의 @error 어노테이션 값을 조회한다.

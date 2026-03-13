@@ -270,7 +270,8 @@ func TestGenerateQueryArg(t *testing.T) {
 		},
 	}
 	code := mustGenerate(t, sf, st)
-	assertContains(t, code, `opts := QueryOpts{}`)
+	assertContains(t, code, `opts := model.ParseQueryOpts(c, model.QueryOptsConfig{`)
+	assertContains(t, code, `PaginationConfig{Style: "offset"`)
 	assertContains(t, code, `h.ReservationModel.ListByUserID(currentUser.ID, opts)`)
 	assertContains(t, code, `reservations, total, err`)
 	assertContains(t, code, `"total":`)
@@ -719,16 +720,16 @@ func TestGenerateSortAllowlist(t *testing.T) {
 		},
 	}
 	code := mustGenerate(t, sf, st)
-	// allowlist 기반 sort 검증 코드가 생성되어야 함
-	assertContains(t, code, `allowedSort := map[string]bool{`)
-	assertContains(t, code, `"created_at": true`)
-	assertContains(t, code, `"title": true`)
-	assertContains(t, code, `"price": true`)
-	assertContains(t, code, `allowedSort[v]`)
-	// direction도 asc/desc 검증
-	assertContains(t, code, `v == "asc" || v == "desc"`)
-	// 검증 없는 raw c.Query("sort"); v != "" 패턴은 없어야 함
-	assertNotContains(t, code, `c.Query("sort"); v != ""`)
+	// model.ParseQueryOpts로 sort allowlist 포함 config 생성
+	assertContains(t, code, `model.ParseQueryOpts(c, model.QueryOptsConfig{`)
+	assertContains(t, code, `&model.SortConfig{`)
+	assertContains(t, code, `"created_at"`)
+	assertContains(t, code, `"title"`)
+	assertContains(t, code, `"price"`)
+	assertContains(t, code, `Default: "created_at"`)
+	// 수동 파싱 패턴 없어야 함
+	assertNotContains(t, code, `allowedSort`)
+	assertNotContains(t, code, `c.Query("sort")`)
 }
 
 func TestGenerateSortNoXSort(t *testing.T) {
@@ -749,9 +750,9 @@ func TestGenerateSortNoXSort(t *testing.T) {
 		},
 	}
 	code := mustGenerate(t, sf, st)
-	// x-sort 없으면 sort 관련 코드 없음
-	assertNotContains(t, code, `allowedSort`)
-	assertNotContains(t, code, `c.Query("sort")`)
+	// x-sort 없으면 SortConfig 없음
+	assertNotContains(t, code, `Sort:`)
+	assertNotContains(t, code, `SortConfig`)
 }
 
 // --- BUG007: auth Claims ---
@@ -794,4 +795,54 @@ func TestGenerateSubscribeAuthClaims(t *testing.T) {
 	}
 	code := mustGenerate(t, sf, nil)
 	assertContains(t, code, `UserID: currentUser.ID`)
+}
+
+// --- BUG012: 미사용 import 제거 ---
+
+func TestGenerateNoUnusedImportDatabaseSQL(t *testing.T) {
+	// @post가 있으면 tx 코드가 생성되지만, database/sql은 handler.go에만 필요
+	sf := parser.ServiceFunc{
+		Name: "CreateSession", FileName: "create_session.go",
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqPost, Model: "Session.Create", Inputs: map[string]string{"UserID": "request.UserID"}, Result: &parser.Result{Type: "Session", Var: "session"}},
+			{Type: parser.SeqResponse, Fields: map[string]string{"session": "session"}},
+		},
+	}
+	code := mustGenerate(t, sf, nil)
+	assertNotContains(t, code, `"database/sql"`)
+	assertContains(t, code, `h.DB.BeginTx`)
+}
+
+func TestGenerateNoUnusedImportStrconv(t *testing.T) {
+	// string 타입 request param만 있으면 strconv 불필요
+	sf := parser.ServiceFunc{
+		Name: "GetCourse", FileName: "get_course.go",
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqGet, Model: "Course.FindByID", Inputs: map[string]string{"ID": "request.CourseID"}, Result: &parser.Result{Type: "Course", Var: "course"}},
+			{Type: parser.SeqResponse, Fields: map[string]string{"course": "course"}},
+		},
+	}
+	code := mustGenerate(t, sf, nil)
+	assertNotContains(t, code, `"strconv"`)
+}
+
+func TestGenerateKeepsStrconvWhenUsed(t *testing.T) {
+	// int64 path param이 있으면 strconv.ParseInt 생성 → strconv 유지
+	st := &validator.SymbolTable{
+		Models:    map[string]validator.ModelSymbol{},
+		DDLTables: map[string]validator.DDLTable{},
+		Operations: map[string]validator.OperationSymbol{
+			"GetCourse": {PathParams: []validator.PathParam{{Name: "ID", GoType: "int64"}}},
+		},
+	}
+	sf := parser.ServiceFunc{
+		Name: "GetCourse", FileName: "get_course.go",
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqGet, Model: "Course.FindByID", Inputs: map[string]string{"ID": "request.ID"}, Result: &parser.Result{Type: "Course", Var: "course"}},
+			{Type: parser.SeqResponse, Fields: map[string]string{"course": "course"}},
+		},
+	}
+	code := mustGenerate(t, sf, st)
+	assertContains(t, code, `"strconv"`)
+	assertContains(t, code, `strconv.ParseInt`)
 }

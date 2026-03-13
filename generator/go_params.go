@@ -231,11 +231,11 @@ func collectImports(sf parser.ServiceFunc, reqParams []typedRequestParam, pathPa
 			break
 		}
 	}
-	if hasNonStringPathParam || needsQO {
+	if hasNonStringPathParam {
 		seen["strconv"] = true
 	}
 
-	if needsCU {
+	if needsCU || needsQO {
 		seen["model"] = true
 	}
 	if hasWriteSequence(sf.Sequences) {
