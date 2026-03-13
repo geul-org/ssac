@@ -445,8 +445,8 @@ func TestGenerateResponseDirect(t *testing.T) {
 		},
 	}
 	code := mustGenerate(t, sf, nil)
-	assertContains(t, code, `c.JSON(http.StatusOK, gigPage)`)
-	assertNotContains(t, code, `c.JSON(http.StatusOK, gin.H`)
+	assertContains(t, code, `c.JSON(__RESPONSE_STATUS__, gigPage)`)
+	assertNotContains(t, code, `c.JSON(__RESPONSE_STATUS__, gin.H`)
 	assertNotContains(t, code, `pagination`)
 }
 

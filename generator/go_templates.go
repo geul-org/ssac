@@ -93,7 +93,7 @@ var goTemplates = template.Must(template.New("").Parse(`
 {{end}}
 
 {{- define "response" -}}
-	c.JSON(http.StatusOK, gin.H{
+	c.JSON(__RESPONSE_STATUS__, gin.H{
 		{{- range $key, $val := .ResponseFields}}
 		"{{$key}}": {{$val}},
 		{{- end}}
@@ -104,7 +104,7 @@ var goTemplates = template.Must(template.New("").Parse(`
 {{end}}
 
 {{- define "response_direct" -}}
-	c.JSON(http.StatusOK, {{.Target}})
+	c.JSON(__RESPONSE_STATUS__, {{.Target}})
 {{end}}
 
 {{- define "sub_get" -}}
