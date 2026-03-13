@@ -162,6 +162,50 @@ func TestGenerateCallErrStatus(t *testing.T) {
 	assertNotContains(t, code, `http.StatusInternalServerError`)
 }
 
+func TestGenerateCallErrStatusFromSymbolTable(t *testing.T) {
+	// @call 대상 함수에 @error 401 어노테이션 → .ssac 명시 없으면 401 사용
+	st := &validator.SymbolTable{
+		Models: map[string]validator.ModelSymbol{
+			"auth._func": {Methods: map[string]validator.MethodInfo{
+				"VerifyPassword": {ErrStatus: 401},
+			}},
+		},
+		Operations: map[string]validator.OperationSymbol{},
+		DDLTables:  map[string]validator.DDLTable{},
+	}
+	sf := parser.ServiceFunc{
+		Name: "Login", FileName: "login.go",
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqCall, Model: "auth.VerifyPassword", Inputs: map[string]string{"Email": "request.Email", "Password": "request.Password"}},
+		},
+	}
+	code := mustGenerate(t, sf, st)
+	assertContains(t, code, `http.StatusUnauthorized`)
+	assertNotContains(t, code, `http.StatusInternalServerError`)
+}
+
+func TestGenerateCallErrStatusSsacOverridesAnnotation(t *testing.T) {
+	// .ssac 파일 명시값(500)이 @error 어노테이션(401)보다 우선
+	st := &validator.SymbolTable{
+		Models: map[string]validator.ModelSymbol{
+			"auth._func": {Methods: map[string]validator.MethodInfo{
+				"VerifyPassword": {ErrStatus: 401},
+			}},
+		},
+		Operations: map[string]validator.OperationSymbol{},
+		DDLTables:  map[string]validator.DDLTable{},
+	}
+	sf := parser.ServiceFunc{
+		Name: "Login", FileName: "login.go",
+		Sequences: []parser.Sequence{
+			{Type: parser.SeqCall, Model: "auth.VerifyPassword", Inputs: map[string]string{"Email": "request.Email"}, ErrStatus: 500},
+		},
+	}
+	code := mustGenerate(t, sf, st)
+	assertContains(t, code, `http.StatusInternalServerError`)
+	assertNotContains(t, code, `http.StatusUnauthorized`)
+}
+
 func TestGenerateCallBareVariable(t *testing.T) {
 	sf := parser.ServiceFunc{
 		Name: "Register", FileName: "register.go",
@@ -722,7 +766,7 @@ func TestGenerateAuthClaims(t *testing.T) {
 	}
 	code := mustGenerate(t, sf, nil)
 	// currentUser 참조 시 Claims 자동 추가
-	assertContains(t, code, `Claims: authz.Claims{UserID: currentUser.ID}`)
+	assertContains(t, code, `UserID: currentUser.ID`)
 	assertContains(t, code, `Role: currentUser.Role`)
 }
 
@@ -749,5 +793,5 @@ func TestGenerateSubscribeAuthClaims(t *testing.T) {
 		},
 	}
 	code := mustGenerate(t, sf, nil)
-	assertContains(t, code, `Claims: authz.Claims{UserID: currentUser.ID}`)
+	assertContains(t, code, `UserID: currentUser.ID`)
 }

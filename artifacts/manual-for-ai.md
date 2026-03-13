@@ -104,7 +104,7 @@ Target: variable (`course`) or variable.field (`course.InstructorID`)
 - `{inputs}`: JSON-style context for OPA policy (ownership, org, etc.)
 - Codegen: `authz.Check(authz.CheckRequest{Action: "action", Resource: "resource", ...})`
 - `currentUser` auto-extracted only if inputs reference `currentUser.*`
-- When `currentUser.*` is referenced, `Role: currentUser.Role` is auto-added (for OPA `input.claims.role`)
+- When `currentUser.*` is referenced, `Role: currentUser.Role` and `UserID: currentUser.ID` are auto-added (for OPA policy)
 
 ### Call — External Function
 
@@ -115,6 +115,7 @@ Target: variable (`course`) or variable.field (`course.InstructorID`)
 
 - Package name from Go import declarations in spec file
 - With result: 500 on error. Without result: 401 on error.
+- **@error annotation**: Target function's `// @error NNN` doc comment sets default error status. 3-tier priority: `.ssac explicit` > `@error annotation` > `default (500/401)`
 
 ### Publish — Event Publishing
 
@@ -147,7 +148,7 @@ func OnOrderCompleted(message OnOrderCompletedMessage) {}
 - `message` replaces `request` as input source: `message.OrderID`, `message.Email`
 - Validation: no `@response`, no `request` usage, no `message` in HTTP func, param required, struct type exists, field exists
 - Parser IR: `ServiceFunc.Subscribe = &SubscribeInfo{Topic: "...", MessageType: "..."}` (MessageType는 함수 파라미터에서 자동 추출), `ServiceFunc.Param = &ParamInfo{...}`, `ServiceFunc.Structs = [...]`
-- Codegen: `func Name(ctx context.Context, message T) error` — not gin handler. Errors → `return fmt.Errorf(...)`, success → `return nil`
+- Codegen: `func (h *Handler) Name(ctx context.Context, message T) error` — Handler method, not gin handler. Errors → `return fmt.Errorf(...)`, success → `return nil`
 
 ### Response — Field Mapping Block
 
@@ -169,10 +170,11 @@ func OnOrderCompleted(message OnOrderCompletedMessage) {}
 
 ## Full Example
 
+Spec file:
 ```go
-package service
+package reservation
 
-import "myapp/auth"
+import "myapp/billing"
 
 // @auth "cancel" "reservation" {id: request.ReservationID} "권한 없음"
 // @get Reservation reservation = Reservation.FindByID({reservationID: request.ReservationID})
@@ -187,6 +189,8 @@ import "myapp/auth"
 // }
 func CancelReservation() {}
 ```
+
+Generated code: `func (h *Handler) CancelReservation(c *gin.Context)` — Handler struct method with auto tx wrapping (@put), `h.ReservationModel.WithTx(tx).Method()` for CRUD, `billing.CalculateRefund()` outside tx.
 
 ## Directory Structure
 
@@ -226,12 +230,15 @@ Auto-detected by `ssac validate <project-root>`:
 ## Codegen Features (gin framework)
 
 Generated code uses **gin** framework (`c *gin.Context`):
-- Function signature: `func Name(c *gin.Context)`
+- Handler struct: `func (h *Handler) Name(c *gin.Context)` — all handlers are methods on `*Handler`
+- Handler fields: `DB *sql.DB` + model interfaces (`CourseModel model.CourseModel`, etc.)
 - Error responses: `c.JSON(status, gin.H{"error": "msg"})`
 - Success responses: `c.JSON(http.StatusOK, gin.H{...})` with field mapping, or `c.JSON(http.StatusOK, var)` for `@response var` shorthand
 - Path params: `c.Param("Name")` + type conversion
 - Request body: `c.ShouldBindJSON(&req)` (2+ request params, or 1+ in POST/PUT) or `c.Query("Name")` (single GET/DELETE)
 - currentUser: `c.MustGet("currentUser").(*model.CurrentUser)` — auto-generated when inputs reference `currentUser.*`
+- Model calls: `h.CourseModel.Method(...)` (read-only) or `h.CourseModel.WithTx(tx).Method(...)` (write functions)
+- **Auto transaction**: Functions with any `@post`/`@put`/`@delete` → `BeginTx`/`defer Rollback`/`Commit` wrapping. All model CRUD calls get `.WithTx(tx)` for read+write consistency. `@call` stays outside tx (external logic, no resource access by contract).
 
 Additional features when symbol table (external SSOT) is available:
 
@@ -253,8 +260,9 @@ Additional features when symbol table (external SSOT) is available:
   - OpenAPI x-: infrastructure params validated against SSaC `query` usage
 - **Domain folder structure**: `service/<domain>/*.go` required (flat service/*.go is ERROR). `service/auth/login.go` → `Domain="auth"` → `outDir/auth/login.go`, `package auth`
 - **@state codegen**: `@state {id} {inputs} "transition"` → `err := {id}state.CanTransition({id}state.Input{...}, "transition")` (error return), import `"states/{id}state"`
-- **@auth codegen**: `@auth "action" "resource" {inputs}` → `authz.Check(authz.CheckRequest{Action: "action", Resource: "resource", ...})` (403 Forbidden). `currentUser` auto-extracted only if inputs reference `currentUser.*`. When `currentUser.*` is referenced, `Role: currentUser.Role` auto-added for OPA policy
-- **@call codegen**: `@call pkg.Func({Key: value})` → `pkg.Func(pkg.FuncRequest{Key: value, ...})`. No result → `_, err` guard-style (401), with result → value-style (500)
+- **@auth codegen**: `@auth "action" "resource" {inputs}` → `authz.Check(authz.CheckRequest{Action: "action", Resource: "resource", ...})` (403 Forbidden). `currentUser` auto-extracted only if inputs reference `currentUser.*`. When `currentUser.*` is referenced, `Role: currentUser.Role` and `UserID: currentUser.ID` auto-added for OPA policy
+- **@call codegen**: `@call pkg.Func({Key: value})` → `pkg.Func(pkg.FuncRequest{Key: value, ...})`. No result → `_, err` guard-style (401), with result → value-style (500). ErrStatus 3-tier: `.ssac` > `@error` annotation > default
+- **@call @error annotation**: Target function `// @error NNN` doc comment → `MethodInfo.ErrStatus`. Parsed in 3rd scan (standalone functions). `pkgName._func` model key in `st.Models`
 - **@call input type validation**: @call inputs field types compared against func Request struct field types. DDL-traced type != Request type → ERROR
 - **config.* input rejected**: `config.*` inputs not supported (validator ERROR). Infrastructure config → `os.Getenv()` inside func
 - **Unused variable `_` handling**: Result variables not referenced in subsequent sequences (guard targets, inputs, response fields) → `_, err` instead of `varName, err`. `:=` vs `=`: if `err` already declared and result is `_` (no new variables) → `_, err =`; if `err` is first declaration → `_, err :=`
@@ -262,7 +270,7 @@ Additional features when symbol table (external SSOT) is available:
 - **Package prefix model**: `pkg.Model.Method({...})` → validates against Go interface in package path. Missing interface → WARNING, missing method → ERROR with available methods list. Parameter matching: SSaC keys ↔ interface params (`context.Context` excluded). Package models skip DDL check and `models_gen.go`
 - **Go reserved word validation**: DDL column names that are Go keywords (`type`, `range`, `select`, etc.) → ERROR with table name and rename suggestion. Prevents `models_gen.go` compile errors.
 - **@publish codegen**: `@publish "topic" {payload}` → `queue.Publish(c.Request.Context(), "topic", map[string]any{...})` (HTTP) or `queue.Publish(ctx, ...)` (subscribe). Options: `queue.WithDelay()`, `queue.WithPriority()`. Import `"queue"` auto-added.
-- **@subscribe codegen**: `func Name(ctx context.Context, message T) error`. Errors → `return fmt.Errorf(...)`, success → `return nil`. No gin dependency. Message type is Go struct in same .ssac file.
+- **@subscribe codegen**: `func (h *Handler) Name(ctx context.Context, message T) error`. Handler method. Errors → `return fmt.Errorf(...)`, success → `return nil`. No gin dependency. Message type is Go struct in same .ssac file.
 - **Subscribe validation**: param required, param name must be `message`, MessageType must exist as struct, `message.Field` must exist in struct. No `@response`, no `request` usage, no `query` usage.
 - **@publish validation**: `query` reserved source cannot be used in @publish inputs (HTTP-only)
 
@@ -303,4 +311,4 @@ Codegen effects:
 - Filenames: snake_case, variables/functions: camelCase, types: PascalCase
 - Go common initialisms: `ID`, `URL`, `HTTP`, `API` etc. — all-caps (exported) or all-lowercase (unexported first word)
 - Tests: `go test ./parser/... ./validator/... ./generator/... -count=1`
-- 165 tests: parser 43 + validator 77 + generator 45
+- 169 tests: parser 43 + validator 78 + generator 48

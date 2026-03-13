@@ -198,7 +198,7 @@ DDL 테이블이 아닌 외부 패키지 모델(session, cache, file 등)은 패
 
 코드젠:
 ```go
-course, err := courseModel.FindByID(courseID)
+course, err := h.CourseModel.FindByID(courseID)
 if err != nil {
     c.JSON(http.StatusInternalServerError, gin.H{"error": "Course 조회 실패"})
     return
@@ -334,7 +334,7 @@ if _, err := authz.Check(authz.CheckRequest{Action: "cancel", Resource: "reserva
 }
 ```
 
-`currentUser`는 inputs에 `currentUser.*`가 참조될 때만 자동 추출된다. 이때 `Role: currentUser.Role`도 자동으로 추가되어 OPA 정책의 `input.claims.role` 검사를 지원한다.
+`currentUser`는 inputs에 `currentUser.*`가 참조될 때만 자동 추출된다. 이때 `Role: currentUser.Role`과 `UserID: currentUser.ID`도 자동으로 추가되어 OPA 정책 검사를 지원한다.
 
 ### @call — 외부 함수 호출
 
@@ -349,6 +349,7 @@ if _, err := authz.Check(authz.CheckRequest{Action: "cancel", Resource: "reserva
 - spec 파일에 import를 명시해야 한다
 - result 없음 → guard-style (401 Unauthorized)
 - result 있음 → value-style (500 InternalServerError)
+- **@error 어노테이션**: 대상 함수의 `// @error NNN` doc comment로 에러 코드 지정 가능. 3단계 우선순위: `.ssac 명시값` > `@error 어노테이션` > `기본값(500/401)`
 
 ```go
 // guard형 (result 없음)
@@ -359,7 +360,7 @@ if _, err := authz.Check(authz.CheckRequest{Action: "cancel", Resource: "reserva
 // @call Refund refund = billing.CalculateRefund({id: reservation.ID, startAt: reservation.StartAt, endAt: reservation.EndAt})
 ```
 
-코드젠 (guard형):
+코드젠 (guard형 — 대상 함수에 `// @error 401` 어노테이션):
 ```go
 if _, err = auth.VerifyPassword(auth.VerifyPasswordRequest{PasswordHash: user.PasswordHash, Password: password}); err != nil {
     c.JSON(http.StatusUnauthorized, gin.H{"error": "verifyPassword 호출 실패"})
@@ -445,8 +446,8 @@ func OnOrderCompleted(message OnOrderCompletedMessage) {}
 코드젠 결과 (HTTP 핸들러와 다름):
 
 ```go
-func OnOrderCompleted(ctx context.Context, message OnOrderCompletedMessage) error {
-    order, err := orderModel.FindByID(message.OrderID)
+func (h *Handler) OnOrderCompleted(ctx context.Context, message OnOrderCompletedMessage) error {
+    order, err := h.OrderModel.FindByID(message.OrderID)
     if err != nil {
         return fmt.Errorf("Order 조회 실패: %w", err)
     }
@@ -457,7 +458,7 @@ func OnOrderCompleted(ctx context.Context, message OnOrderCompletedMessage) erro
 
 | 항목 | HTTP 함수 | Subscribe 함수 |
 |---|---|---|
-| 시그니처 | `func(c *gin.Context)` | `func(ctx context.Context, message T) error` |
+| 시그니처 | `func (h *Handler) Name(c *gin.Context)` | `func (h *Handler) Name(ctx context.Context, message T) error` |
 | 입력 | `request` (gin binding) | `message` (함수 파라미터) |
 | 출력 | `c.JSON()` | `return error` |
 | 에러 처리 | `c.JSON(500, ...)` + `return` | `return fmt.Errorf(...)` |
@@ -714,6 +715,7 @@ package model
 import "time"
 
 type ReservationModel interface {
+    WithTx(tx *sql.Tx) ReservationModel
     CountByRoomID(roomID int64) (*int, error)
     Create(userID int64, roomID int64, startAt time.Time, endAt time.Time) (*Reservation, error)
     FindByID(reservationID int64) (*Reservation, error)
@@ -764,7 +766,7 @@ WARNING 예시: put/delete 후 갱신 없이 response에서 이전 변수를 사
 
 ```go
 // 첫 시퀀스에서 미참조 (err 첫 선언):
-_, err := tokenModel.Generate(key)
+_, err := h.TokenModel.Generate(key)
 
 // 이후 시퀀스에서 미참조 (err 이미 선언):
 _, err = billing.HoldEscrow(billing.HoldEscrowRequest{Amount: order.Budget})
@@ -821,14 +823,16 @@ func CancelReservation() {}
 package reservation
 
 import (
+    "database/sql"
     "net/http"
+    "strconv"
 
     "github.com/gin-gonic/gin"
     "myapp/billing"
     "states/reservationstate"
 )
 
-func CancelReservation(c *gin.Context) {
+func (h *Handler) CancelReservation(c *gin.Context) {
     reservationIDStr := c.Param("ReservationID")
     reservationID, err := strconv.ParseInt(reservationIDStr, 10, 64)
     if err != nil {
@@ -839,14 +843,16 @@ func CancelReservation(c *gin.Context) {
     // auth
     currentUser := c.MustGet("currentUser").(*model.CurrentUser)
     if _, err := authz.Check(authz.CheckRequest{Action: "cancel", Resource: "reservation",
-        ID: reservationID,
+        ID:     reservationID,
+        Role:   currentUser.Role,
+        UserID: currentUser.ID,
     }); err != nil {
         c.JSON(http.StatusForbidden, gin.H{"error": "권한 없음"})
         return
     }
 
-    // get
-    reservation, err := reservationModel.FindByID(reservationID)
+    // get (before tx — read-only)
+    reservation, err := h.ReservationModel.FindByID(reservationID)
     if err != nil {
         c.JSON(http.StatusInternalServerError, gin.H{"error": "Reservation 조회 실패"})
         return
@@ -866,7 +872,7 @@ func CancelReservation(c *gin.Context) {
         return
     }
 
-    // call (named fields)
+    // call (external — outside tx)
     refund, err := billing.CalculateRefund(billing.CalculateRefundRequest{
         ID:      reservation.ID,
         StartAt: reservation.StartAt,
@@ -877,17 +883,30 @@ func CancelReservation(c *gin.Context) {
         return
     }
 
+    // transaction (auto-wrapped: @put detected)
+    tx, err := h.DB.BeginTx(c.Request.Context(), nil)
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "트랜잭션 시작 실패"})
+        return
+    }
+    defer tx.Rollback()
+
     // put
-    err = reservationModel.UpdateStatus(reservationID, "cancelled")
+    err = h.ReservationModel.WithTx(tx).UpdateStatus(reservationID, "cancelled")
     if err != nil {
         c.JSON(http.StatusInternalServerError, gin.H{"error": "Reservation 수정 실패"})
         return
     }
 
-    // get (re-fetch)
-    reservation, err = reservationModel.FindByID(reservationID)
+    // get (re-fetch inside tx)
+    reservation, err = h.ReservationModel.WithTx(tx).FindByID(reservationID)
     if err != nil {
         c.JSON(http.StatusInternalServerError, gin.H{"error": "Reservation 조회 실패"})
+        return
+    }
+
+    if err := tx.Commit(); err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "트랜잭션 커밋 실패"})
         return
     }
 

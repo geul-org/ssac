@@ -41,9 +41,6 @@ type templateData struct {
 	FuncMethod string
 	ErrStatus  string // "http.StatusInternalServerError", "http.StatusUnauthorized" 등
 
-	// auth claims
-	ClaimsCode string // "Claims: authz.Claims{UserID: currentUser.ID}, " 또는 ""
-
 	// publish
 	Topic      string // "order.completed"
 	OptionCode string // ", queue.WithDelay(1800)" 또는 ""
@@ -80,6 +77,8 @@ func buildTemplateData(seq parser.Sequence, errDeclared *bool, declaredVars map[
 			}
 			if seq.ErrStatus != 0 {
 				d.ErrStatus = httpStatusConst(seq.ErrStatus)
+			} else if errCode := lookupCallErrStatus(st, seq.Model); errCode != 0 {
+				d.ErrStatus = httpStatusConst(errCode)
 			} else {
 				d.ErrStatus = "http.StatusInternalServerError"
 			}
@@ -162,13 +161,15 @@ func buildTemplateData(seq parser.Sequence, errDeclared *bool, declaredVars map[
 	if seq.Type == parser.SeqState || seq.Type == parser.SeqAuth || seq.Type == parser.SeqCall {
 		if len(seq.Inputs) > 0 {
 			inputs := seq.Inputs
-			// @auth + currentUser 참조 → Role 자동 추가 + Claims 자동 추가
+			// @auth + currentUser 참조 → Role, UserID 자동 추가
 			if seq.Type == parser.SeqAuth && hasCurrentUserRef(inputs) {
 				inputs = copyInputs(inputs)
 				if _, hasRole := inputs["Role"]; !hasRole {
 					inputs["Role"] = "currentUser.Role"
 				}
-				d.ClaimsCode = "Claims: authz.Claims{UserID: currentUser.ID}, "
+				if _, hasUserID := inputs["UserID"]; !hasUserID {
+					inputs["UserID"] = "currentUser.ID"
+				}
 			}
 			d.InputFields = buildInputFieldsFromMap(inputs)
 		}
@@ -443,4 +444,25 @@ func httpStatusConst(code int) string {
 	default:
 		return fmt.Sprintf("%d", code)
 	}
+}
+
+// lookupCallErrStatus는 SymbolTable에서 @call 대상 함수의 @error 어노테이션 값을 조회한다.
+func lookupCallErrStatus(st *validator.SymbolTable, model string) int {
+	if st == nil {
+		return 0
+	}
+	parts := strings.SplitN(model, ".", 2)
+	if len(parts) < 2 {
+		return 0
+	}
+	pkgName, funcName := parts[0], parts[1]
+	for modelKey, ms := range st.Models {
+		if !strings.HasPrefix(modelKey, pkgName+".") {
+			continue
+		}
+		if mi, ok := ms.Methods[funcName]; ok {
+			return mi.ErrStatus
+		}
+	}
+	return 0
 }

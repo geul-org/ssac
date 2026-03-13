@@ -43,6 +43,7 @@ type MethodInfo struct {
 	Cardinality string            // "one", "many", "exec"
 	Params      []string          // interface 파라미터명 (context.Context 제외, 패키지 모델용)
 	ParamTypes  map[string]string // 파라미터명 → Go 타입 (e.g. "amount" → "int"). @call Request struct 필드용
+	ErrStatus   int               // @error 어노테이션 값 (0이면 미지정)
 }
 
 // DDLTable은 DDL에서 파싱한 테이블 컬럼 정보다.
@@ -629,6 +630,53 @@ func (st *SymbolTable) loadPackageGoInterfaces(pkgName, dir string) {
 					st.Models[key] = ms
 				}
 			}
+		}
+	}
+
+	// 3차: standalone function 파싱 (@call 대상)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, filepath.Join(dir, entry.Name()), nil, parser.ParseComments)
+		if err != nil {
+			continue
+		}
+		for _, decl := range f.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || fd.Recv != nil {
+				continue
+			}
+			funcName := fd.Name.Name
+			reqStructName := funcName + "Request"
+			if _, ok := requestStructs[reqStructName]; !ok {
+				continue
+			}
+
+			// @error 어노테이션 파싱
+			errStatus := 0
+			if fd.Doc != nil {
+				for _, comment := range fd.Doc.List {
+					text := strings.TrimSpace(strings.TrimPrefix(comment.Text, "//"))
+					if strings.HasPrefix(text, "@error ") {
+						if code, err := strconv.Atoi(strings.TrimSpace(text[7:])); err == nil {
+							errStatus = code
+						}
+					}
+				}
+			}
+
+			modelKey := pkgName + "._func"
+			ms, exists := st.Models[modelKey]
+			if !exists {
+				ms = ModelSymbol{Methods: make(map[string]MethodInfo)}
+			}
+			mi := MethodInfo{
+				ParamTypes: requestStructs[reqStructName],
+				ErrStatus:  errStatus,
+			}
+			ms.Methods[funcName] = mi
+			st.Models[modelKey] = ms
 		}
 	}
 }
