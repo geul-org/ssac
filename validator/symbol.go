@@ -52,6 +52,7 @@ type DDLTable struct {
 	ColumnOrder []string          // DDL 정의 순서 보존
 	ForeignKeys []ForeignKey      // FK 관계 목록
 	Indexes     []Index           // 인덱스 목록
+	PrimaryKey  []string          // PK 컬럼명 목록 (e.g. ["id"])
 }
 
 // ForeignKey는 외래 키 관계다.
@@ -63,8 +64,9 @@ type ForeignKey struct {
 
 // Index는 테이블 인덱스다.
 type Index struct {
-	Name    string   // 인덱스 이름 (e.g. "idx_reservations_room_time")
-	Columns []string // 인덱스 컬럼 목록
+	Name     string   // 인덱스 이름 (e.g. "idx_reservations_room_time")
+	Columns  []string // 인덱스 컬럼 목록
+	IsUnique bool     // UNIQUE INDEX 또는 UNIQUE 제약
 }
 
 // OperationSymbol은 API 엔드포인트의 request/response 필드 목록이다.
@@ -838,9 +840,29 @@ func parseDDLTables(content string, tables map[string]DDLTable) {
 			continue
 		}
 
-		// PRIMARY, UNIQUE, CHECK → skip
-		if strings.HasPrefix(upper, "PRIMARY") || strings.HasPrefix(upper, "UNIQUE") ||
-			strings.HasPrefix(upper, "CHECK") || line == "" {
+		// PRIMARY KEY → PK 컬럼 추출
+		if strings.HasPrefix(upper, "PRIMARY") {
+			if t, ok := tables[currentTable]; ok {
+				t.PrimaryKey = extractParenColumns(line)
+				tables[currentTable] = t
+			}
+			continue
+		}
+
+		// UNIQUE 제약 (독립 라인) → unique index 추가
+		if strings.HasPrefix(upper, "UNIQUE") {
+			if t, ok := tables[currentTable]; ok {
+				cols := extractParenColumns(line)
+				if len(cols) > 0 {
+					t.Indexes = append(t.Indexes, Index{Name: "unique_" + strings.Join(cols, "_"), Columns: cols, IsUnique: true})
+					tables[currentTable] = t
+				}
+			}
+			continue
+		}
+
+		// CHECK → skip
+		if strings.HasPrefix(upper, "CHECK") || line == "" {
 			continue
 		}
 
@@ -858,6 +880,16 @@ func parseDDLTables(content string, tables map[string]DDLTable) {
 		if t, ok := tables[currentTable]; ok {
 			t.Columns[colName] = goType
 			t.ColumnOrder = append(t.ColumnOrder, colName)
+
+			// 인라인 PRIMARY KEY
+			if strings.Contains(upper, "PRIMARY KEY") {
+				t.PrimaryKey = append(t.PrimaryKey, colName)
+			}
+
+			// 인라인 UNIQUE
+			if strings.Contains(upper, "UNIQUE") && !strings.Contains(upper, "PRIMARY") {
+				t.Indexes = append(t.Indexes, Index{Name: colName + "_unique", Columns: []string{colName}, IsUnique: true})
+			}
 
 			// 인라인 FK: column_name TYPE ... REFERENCES table(col)
 			if fk, ok := parseInlineFK(colName, parts); ok {
@@ -951,10 +983,31 @@ func parseCreateIndex(line string, tables map[string]DDLTable) {
 		}
 	}
 
+	isUnique := strings.Contains(strings.ToUpper(line), "UNIQUE")
 	if t, ok := tables[tableName]; ok && len(cols) > 0 {
-		t.Indexes = append(t.Indexes, Index{Name: idxName, Columns: cols})
+		t.Indexes = append(t.Indexes, Index{Name: idxName, Columns: cols, IsUnique: isUnique})
 		tables[tableName] = t
 	}
+}
+
+// extractParenColumns는 "PRIMARY KEY (col1, col2)" 등에서 괄호 안 컬럼을 추출한다.
+func extractParenColumns(line string) []string {
+	parenIdx := strings.Index(line, "(")
+	if parenIdx < 0 {
+		return nil
+	}
+	inner := line[parenIdx+1:]
+	inner = strings.TrimSuffix(strings.TrimSpace(inner), ",")
+	inner = strings.TrimSuffix(inner, ");")
+	inner = strings.TrimSuffix(inner, ")")
+	var cols []string
+	for _, c := range strings.Split(inner, ",") {
+		c = strings.TrimSpace(c)
+		if c != "" {
+			cols = append(cols, c)
+		}
+	}
+	return cols
 }
 
 // parseRef는 "users(id)" → ("users", "id") を파싱한다.

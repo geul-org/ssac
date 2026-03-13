@@ -1,5 +1,9 @@
 # SSaC — Service Sequences as Code
 
+> **This repository is now managed as part of [fullend](https://github.com/geul-org/fullend).** All active development, issues, and contributions happen in the fullend repository. This repo remains available as a reference.
+
+---
+
 Service logic is a series of decisions: which model to query, what to guard against, when to reject, what to return. These decisions belong to the person who understands the business — but they get buried in boilerplate, scattered across layers, and lost in rewrites.
 
 SSaC preserves those decisions as a declarative spec. You declare **what** happens and **in what order**. The tool generates the implementation.

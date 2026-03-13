@@ -1274,3 +1274,111 @@ func TestExtractSqlcParamsSingleWhere(t *testing.T) {
 		t.Errorf("param[0]: got %q, want %q", params[0], want[0])
 	}
 }
+
+// --- DDL 파싱: PrimaryKey + UNIQUE ---
+
+func TestDDLPrimaryKey(t *testing.T) {
+	tables := map[string]DDLTable{}
+	ddl := `CREATE TABLE users (
+    id BIGSERIAL PRIMARY KEY,
+    email VARCHAR(255) NOT NULL
+);`
+	parseDDLTables(ddl, tables)
+	tbl := tables["users"]
+	if len(tbl.PrimaryKey) != 1 || tbl.PrimaryKey[0] != "id" {
+		t.Errorf("expected PrimaryKey=[id], got %v", tbl.PrimaryKey)
+	}
+}
+
+func TestDDLPrimaryKeyComposite(t *testing.T) {
+	tables := map[string]DDLTable{}
+	ddl := `CREATE TABLE enrollments (
+    user_id BIGINT NOT NULL,
+    course_id BIGINT NOT NULL,
+    PRIMARY KEY (user_id, course_id)
+);`
+	parseDDLTables(ddl, tables)
+	tbl := tables["enrollments"]
+	if len(tbl.PrimaryKey) != 2 {
+		t.Fatalf("expected 2 PK columns, got %d: %v", len(tbl.PrimaryKey), tbl.PrimaryKey)
+	}
+	if tbl.PrimaryKey[0] != "user_id" || tbl.PrimaryKey[1] != "course_id" {
+		t.Errorf("expected PrimaryKey=[user_id, course_id], got %v", tbl.PrimaryKey)
+	}
+}
+
+func TestDDLInlineUnique(t *testing.T) {
+	tables := map[string]DDLTable{}
+	ddl := `CREATE TABLE users (
+    id BIGSERIAL PRIMARY KEY,
+    email VARCHAR(255) NOT NULL UNIQUE
+);`
+	parseDDLTables(ddl, tables)
+	tbl := tables["users"]
+	found := false
+	for _, idx := range tbl.Indexes {
+		if idx.IsUnique && len(idx.Columns) == 1 && idx.Columns[0] == "email" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected UNIQUE index for email, got indexes: %v", tbl.Indexes)
+	}
+}
+
+func TestDDLUniqueConstraint(t *testing.T) {
+	tables := map[string]DDLTable{}
+	ddl := `CREATE TABLE reservations (
+    id BIGSERIAL PRIMARY KEY,
+    room_id BIGINT NOT NULL,
+    start_time TIMESTAMP NOT NULL,
+    UNIQUE (room_id, start_time)
+);`
+	parseDDLTables(ddl, tables)
+	tbl := tables["reservations"]
+	found := false
+	for _, idx := range tbl.Indexes {
+		if idx.IsUnique && len(idx.Columns) == 2 && idx.Columns[0] == "room_id" && idx.Columns[1] == "start_time" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected UNIQUE index for (room_id, start_time), got indexes: %v", tbl.Indexes)
+	}
+}
+
+func TestDDLCreateUniqueIndex(t *testing.T) {
+	tables := map[string]DDLTable{}
+	ddl := `CREATE TABLE users (
+    id BIGSERIAL PRIMARY KEY,
+    email VARCHAR(255) NOT NULL
+);
+CREATE UNIQUE INDEX idx_users_email ON users (email);`
+	parseDDLTables(ddl, tables)
+	tbl := tables["users"]
+	found := false
+	for _, idx := range tbl.Indexes {
+		if idx.IsUnique && idx.Name == "idx_users_email" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected UNIQUE index idx_users_email, got indexes: %v", tbl.Indexes)
+	}
+}
+
+func TestDDLCreateNonUniqueIndex(t *testing.T) {
+	tables := map[string]DDLTable{}
+	ddl := `CREATE TABLE orders (
+    id BIGSERIAL PRIMARY KEY,
+    status VARCHAR(50) NOT NULL
+);
+CREATE INDEX idx_orders_status ON orders (status);`
+	parseDDLTables(ddl, tables)
+	tbl := tables["orders"]
+	for _, idx := range tbl.Indexes {
+		if idx.Name == "idx_orders_status" && idx.IsUnique {
+			t.Errorf("expected non-unique index, got IsUnique=true")
+		}
+	}
+}
