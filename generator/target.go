@@ -13,6 +13,9 @@ type Target interface {
 	// GenerateModelInterfaces는 서비스 함수에서 사용하는 모델 인터페이스를 생성한다.
 	GenerateModelInterfaces(funcs []parser.ServiceFunc, st *validator.SymbolTable, outDir string) error
 
+	// GenerateHandlerStruct는 도메인별 Handler struct를 생성한다.
+	GenerateHandlerStruct(funcs []parser.ServiceFunc, st *validator.SymbolTable, outDir string) error
+
 	// FileExtension은 생성 파일의 확장자를 반환한다. (예: ".go", ".java", ".ts")
 	FileExtension() string
 }

@@ -25,6 +25,11 @@ func GenerateModelInterfaces(funcs []parser.ServiceFunc, st *validator.SymbolTab
 	return DefaultTarget().GenerateModelInterfaces(funcs, st, outDir)
 }
 
+// GenerateHandlerStruct는 도메인별 Handler struct를 생성한다.
+func GenerateHandlerStruct(funcs []parser.ServiceFunc, st *validator.SymbolTable, outDir string) error {
+	return DefaultTarget().GenerateHandlerStruct(funcs, st, outDir)
+}
+
 // GenerateWith는 지정된 Target으로 코드를 생성한다.
 func GenerateWith(t Target, funcs []parser.ServiceFunc, outDir string, st *validator.SymbolTable) error {
 	if err := os.MkdirAll(outDir, 0755); err != nil {
