@@ -5,12 +5,12 @@ package authz
 import "testing"
 
 func TestCheckRequestFields(t *testing.T) {
+	claim := map[string]any{"user_id": int64(42), "role": "client"}
 	req := CheckRequest{
 		Action:     "AcceptProposal",
 		Resource:   "gig",
-		UserID:     42,
-		Role:       "client",
 		ResourceID: 99,
+		Claim:      claim,
 	}
 	if req.Action != "AcceptProposal" {
 		t.Fatal("Action mismatch")
@@ -18,13 +18,17 @@ func TestCheckRequestFields(t *testing.T) {
 	if req.Resource != "gig" {
 		t.Fatal("Resource mismatch")
 	}
-	if req.UserID != 42 {
-		t.Fatal("UserID mismatch")
-	}
-	if req.Role != "client" {
-		t.Fatal("Role mismatch")
-	}
 	if req.ResourceID != 99 {
 		t.Fatal("ResourceID mismatch")
+	}
+	got, ok := req.Claim.(map[string]any)
+	if !ok {
+		t.Fatal("Claim type assertion failed")
+	}
+	if got["user_id"] != int64(42) {
+		t.Fatalf("user_id mismatch: %v", got["user_id"])
+	}
+	if got["role"] != "client" {
+		t.Fatalf("role mismatch: %v", got["role"])
 	}
 }

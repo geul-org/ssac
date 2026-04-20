@@ -12,12 +12,12 @@ import (
 // @func deleteFile
 // @description S3 호환 스토리지에서 파일을 삭제한다
 
-func DeleteFile(req DeleteFileRequest) (DeleteFileResponse, error) {
-	client, err := newS3Client(req.Endpoint, req.Region)
+func DeleteFile(ctx context.Context, req DeleteFileRequest) (DeleteFileResponse, error) {
+	client, err := newS3Client(ctx, req.Endpoint, req.Region)
 	if err != nil {
 		return DeleteFileResponse{}, err
 	}
-	_, err = client.DeleteObject(context.Background(), &s3.DeleteObjectInput{
+	_, err = client.DeleteObject(ctx, &s3.DeleteObjectInput{
 		Bucket: aws.String(req.Bucket),
 		Key:    aws.String(req.Key),
 	})

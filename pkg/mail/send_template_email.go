@@ -4,6 +4,7 @@ package mail
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"html/template"
 	"net/smtp"
@@ -14,7 +15,9 @@ import (
 // @func sendTemplateEmail
 // @description Go 템플릿으로 HTML 이메일을 발송한다
 
-func SendTemplateEmail(req SendTemplateEmailRequest) (SendTemplateEmailResponse, error) {
+// SendTemplateEmail accepts ctx for signature parity. See SendEmail comment.
+func SendTemplateEmail(ctx context.Context, req SendTemplateEmailRequest) (SendTemplateEmailResponse, error) {
+	_ = ctx
 	host := os.Getenv("SMTP_HOST")
 	port, _ := strconv.Atoi(os.Getenv("SMTP_PORT"))
 	username := os.Getenv("SMTP_USERNAME")

@@ -14,8 +14,6 @@ func TestCheckDisabled(t *testing.T) {
 	resp, err := Check(CheckRequest{
 		Action:   "read",
 		Resource: "gig",
-		UserID:   1,
-		Role:     "client",
 	})
 	if err != nil {
 		t.Fatalf("expected no error with DISABLE_AUTHZ=1, got: %v", err)

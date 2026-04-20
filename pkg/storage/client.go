@@ -10,8 +10,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
-func newS3Client(endpoint, region string) (*s3.Client, error) {
-	cfg, err := config.LoadDefaultConfig(context.Background(),
+// newS3Client accepts ctx so that config.LoadDefaultConfig participates in
+// request cancellation (EC2 IMDS / STS lookups honor ctx).
+func newS3Client(ctx context.Context, endpoint, region string) (*s3.Client, error) {
+	cfg, err := config.LoadDefaultConfig(ctx,
 		config.WithRegion(region),
 	)
 	if err != nil {

@@ -8,7 +8,7 @@ import "context"
 // @description 세션에서 key로 value를 조회한다
 // @error 404
 
-func Get(req GetRequest) (GetResponse, error) {
-	value, err := defaultModel.Get(context.Background(), req.Key)
+func Get(ctx context.Context, req GetRequest) (GetResponse, error) {
+	value, err := defaultModel.Get(ctx, req.Key)
 	return GetResponse{Value: value}, err
 }

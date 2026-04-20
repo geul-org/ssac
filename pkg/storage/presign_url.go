@@ -13,8 +13,8 @@ import (
 // @func presignURL
 // @description 서명된 다운로드 URL을 생성한다
 
-func PresignURL(req PresignURLRequest) (PresignURLResponse, error) {
-	client, err := newS3Client(req.Endpoint, req.Region)
+func PresignURL(ctx context.Context, req PresignURLRequest) (PresignURLResponse, error) {
+	client, err := newS3Client(ctx, req.Endpoint, req.Region)
 	if err != nil {
 		return PresignURLResponse{}, err
 	}
@@ -23,7 +23,7 @@ func PresignURL(req PresignURLRequest) (PresignURLResponse, error) {
 		expiresIn = 3600
 	}
 	presigner := s3.NewPresignClient(client)
-	presigned, err := presigner.PresignGetObject(context.Background(), &s3.GetObjectInput{
+	presigned, err := presigner.PresignGetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(req.Bucket),
 		Key:    aws.String(req.Key),
 	}, s3.WithPresignExpires(time.Duration(expiresIn)*time.Second))

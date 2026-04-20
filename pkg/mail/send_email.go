@@ -3,6 +3,7 @@
 package mail
 
 import (
+	"context"
 	"fmt"
 	"net/smtp"
 )
@@ -10,7 +11,12 @@ import (
 // @func sendEmail
 // @description SMTP를 통해 이메일을 발송한다
 
-func SendEmail(req SendEmailRequest) (SendEmailResponse, error) {
+// SendEmail accepts ctx as the first argument for request-cancellation
+// propagation. net/smtp itself does not support ctx yet; the parameter is
+// held for future migration to ctx-aware SMTP dialers and signature parity
+// with the rest of the ssac/pkg runtime.
+func SendEmail(ctx context.Context, req SendEmailRequest) (SendEmailResponse, error) {
+	_ = ctx
 	auth := smtp.PlainAuth("", req.Username, req.Password, req.Host)
 	msg := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\n\r\n%s",
 		req.From, req.To, req.Subject, req.Body)

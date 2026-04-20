@@ -14,12 +14,12 @@ import (
 // @func uploadFile
 // @description S3 호환 스토리지에 파일을 업로드한다
 
-func UploadFile(req UploadFileRequest) (UploadFileResponse, error) {
-	client, err := newS3Client(req.Endpoint, req.Region)
+func UploadFile(ctx context.Context, req UploadFileRequest) (UploadFileResponse, error) {
+	client, err := newS3Client(ctx, req.Endpoint, req.Region)
 	if err != nil {
 		return UploadFileResponse{}, err
 	}
-	_, err = client.PutObject(context.Background(), &s3.PutObjectInput{
+	_, err = client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:      aws.String(req.Bucket),
 		Key:         aws.String(req.Key),
 		Body:        bytes.NewReader(req.Data),

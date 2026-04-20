@@ -10,6 +10,6 @@ import (
 // @func set
 // @description 캐시에 key-value를 저장한다
 
-func Set(req SetRequest) (SetResponse, error) {
-	return SetResponse{}, defaultModel.Set(context.Background(), req.Key, req.Value, time.Duration(req.TTL)*time.Second)
+func Set(ctx context.Context, req SetRequest) (SetResponse, error) {
+	return SetResponse{}, defaultModel.Set(ctx, req.Key, req.Value, time.Duration(req.TTL)*time.Second)
 }

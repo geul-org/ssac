@@ -3,12 +3,15 @@
 package authz
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 )
 
 // loadOwners queries DB for ownership data based on registered mappings.
-func loadOwners(req CheckRequest) (map[string]interface{}, error) {
+// The caller-supplied ctx is propagated into QueryRowContext so that request
+// cancellation reaches the DB driver.
+func loadOwners(ctx context.Context, req CheckRequest) (map[string]interface{}, error) {
 	owners := make(map[string]interface{})
 	if globalDB == nil || len(globalOwnerships) == 0 {
 		return owners, nil
@@ -17,7 +20,7 @@ func loadOwners(req CheckRequest) (map[string]interface{}, error) {
 	for _, om := range globalOwnerships {
 		var ownerID int64
 		query := fmt.Sprintf("SELECT %s FROM %s WHERE id = $1", om.Column, om.Table)
-		err := globalDB.QueryRow(query, req.ResourceID).Scan(&ownerID)
+		err := globalDB.QueryRowContext(ctx, query, req.ResourceID).Scan(&ownerID)
 		if err == sql.ErrNoRows {
 			continue
 		}

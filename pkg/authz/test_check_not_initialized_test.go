@@ -14,8 +14,6 @@ func TestCheckNotInitialized(t *testing.T) {
 	_, err := Check(CheckRequest{
 		Action:   "read",
 		Resource: "gig",
-		UserID:   1,
-		Role:     "client",
 	})
 	if err == nil {
 		t.Fatal("expected error when not initialized")
