@@ -20,6 +20,17 @@ type Config struct {
 	AccessTTL time.Duration
 	// RefreshTTL is the lifetime of refresh tokens issued via RefreshToken.
 	RefreshTTL time.Duration
+
+	// Mode selects the session-token transport:
+	//   - "cookie" (Phase020 default): HttpOnly cookies + CSRF middleware.
+	//   - "bearer": Authorization header only (mobile / API-only clients).
+	//   - "hybrid": Authorization header preferred, cookie fallback.
+	// An empty string preserves pre-Phase020 callers — SetAuthCookies /
+	// ClearAuthCookies treat "" as bearer and no-op.
+	Mode string
+	// CookieAttrs carries the Set-Cookie parameters used by SetAuthCookies
+	// and ClearAuthCookies. Ignored when Mode == "bearer".
+	CookieAttrs CookieAttrs
 }
 
 var (
