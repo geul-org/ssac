@@ -1,0 +1,72 @@
+version: 1
+package: queue
+description: "outbox 기반 durable queue — publish / poll / ack 계약. ssac 는 memory 만 포함하고, durable 백엔드는 yongol 이 이 interface.yaml 로부터 codegen."
+
+ports:
+  - name: QueuePublish
+    description: "큐에 메시지를 enqueue (트랜잭션 내에서도 호출 가능)"
+    when: manifest.queue.backend == "postgres"
+    used_by: [Publish, PublishTx]
+    query:
+      cardinality: exec
+      params:
+        - { name: topic, type: string }
+        - { name: payload, type: "[]byte" }
+        - { name: priority, type: string }
+        - { name: deliver_at, type: "time.Time" }
+        - { name: traceparent, type: string }
+
+  - name: QueuePoll
+    description: "대기 중인 메시지를 한 배치 SELECT … FOR UPDATE SKIP LOCKED"
+    when: manifest.queue.backend == "postgres"
+    used_by: [Subscribe]
+    query:
+      cardinality: many
+      returns:
+        - { name: id, type: int64 }
+        - { name: topic, type: string }
+        - { name: payload, type: "[]byte" }
+        - { name: traceparent, type: string }
+
+  - name: QueueAck
+    description: "처리된 메시지의 상태를 done/failed 로 마킹"
+    when: manifest.queue.backend == "postgres"
+    used_by: [Subscribe]
+    query:
+      cardinality: exec
+      params:
+        - { name: id, type: int64 }
+        - { name: status, type: string }
+
+canonical_ddl: |
+  CREATE TABLE fullend_queue (
+      id           BIGSERIAL PRIMARY KEY,
+      topic        TEXT NOT NULL,
+      payload      JSONB NOT NULL,
+      priority     TEXT NOT NULL DEFAULT 'normal',
+      status       TEXT NOT NULL DEFAULT 'pending',
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      deliver_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      processed_at TIMESTAMPTZ,
+      traceparent  TEXT NOT NULL DEFAULT ''
+  );
+  CREATE INDEX idx_fullend_queue_pending
+      ON fullend_queue (topic, status, deliver_at) WHERE status = 'pending';
+
+canonical_queries: |
+  -- name: QueuePublish :exec
+  INSERT INTO fullend_queue (topic, payload, priority, deliver_at, traceparent)
+  VALUES (@topic, @payload, @priority, @deliver_at, @traceparent);
+
+  -- name: QueuePoll :many
+  SELECT id, topic, payload, traceparent
+  FROM fullend_queue
+  WHERE status = 'pending' AND deliver_at <= NOW()
+  ORDER BY
+      CASE priority WHEN 'high' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END,
+      id
+  FOR UPDATE SKIP LOCKED
+  LIMIT 100;
+
+  -- name: QueueAck :exec
+  UPDATE fullend_queue SET status = @status, processed_at = NOW() WHERE id = @id;

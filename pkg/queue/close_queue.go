@@ -2,7 +2,7 @@
 //ff:what 폴링 루프를 중지하고 정리한다
 package queue
 
-// Close stops the polling loop and waits for it to finish.
+// Close stops the polling loop (if any) and resets package state.
 func Close() error {
 	mu.Lock()
 	c := cancel
@@ -19,8 +19,7 @@ func Close() error {
 	mu.Lock()
 	inited = false
 	handlers = nil
-	backend = ""
-	db = nil
+	backend = nil
 	cancel = nil
 	done = nil
 	mu.Unlock()

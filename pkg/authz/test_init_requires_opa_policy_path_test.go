@@ -11,7 +11,7 @@ func TestInitRequiresOPAPolicyPath(t *testing.T) {
 	os.Unsetenv("DISABLE_AUTHZ")
 	os.Unsetenv("OPA_POLICY_PATH")
 
-	err := Init(nil, nil)
+	err := Init("", nil)
 	if err == nil {
 		t.Fatal("expected error when OPA_POLICY_PATH is not set")
 	}

@@ -1,51 +1,70 @@
 //ff:func feature=pkg-queue type=loader control=selection
-//ff:what 큐 백엔드를 초기화한다
+//ff:what 큐 백엔드를 초기화한다 — memory 기본 또는 외부 주입된 Backend
 package queue
 
 import (
 	"context"
-	"database/sql"
 	"errors"
-	"fmt"
 	"sync"
 )
 
 var (
+	// ErrNotInitialized — Publish/Subscribe/Start called before Init.
 	ErrNotInitialized = errors.New("queue: not initialized, call Init first")
+	// ErrUnknownBackend — unsupported backend name passed to Init.
 	ErrUnknownBackend = errors.New("queue: unknown backend")
 )
 
-// singleton state
+// singleton state. Exported via the package-level Publish/Subscribe helpers so
+// runtime code need not pass a queue handle through every call site.
 var (
 	mu       sync.RWMutex
 	handlers map[string][]func(ctx context.Context, msg []byte) error
-	backend  string
-	db       *sql.DB
+	backend  Backend
 	cancel   context.CancelFunc
 	done     chan struct{}
 	inited   bool
 )
 
-// Init initializes the queue with the given backend ("postgres" or "memory").
-// For "postgres", db must be non-nil; the fullend_queue table is auto-created.
-func Init(ctx context.Context, b string, d *sql.DB) error {
+// Init initializes the queue with the memory backend. For durable backends
+// (postgres, redis, etc.) callers use SetBackend(b) after yongol-generated
+// code constructs the Backend implementation against the user's sqlc Queries.
+//
+// Signature accepts backendName for backward-compatible call sites — only
+// "memory" is accepted from inside ssac. Any other name (including
+// "postgres") returns ErrUnknownBackend; the caller must instead call
+// SetBackend(externalImpl) directly.
+func Init(ctx context.Context, backendName string) error {
 	mu.Lock()
 	defer mu.Unlock()
 
-	switch b {
-	case "postgres":
-		if err := initPostgres(ctx, d); err != nil {
-			return err
-		}
-		db = d
+	switch backendName {
 	case "memory":
-		// no setup needed
+		backend = newMemoryBackend()
 	default:
-		return fmt.Errorf("%w: %s", ErrUnknownBackend, b)
+		return errors.New("queue: Init only accepts \"memory\"; use SetBackend for durable backends")
 	}
 
-	backend = b
 	handlers = make(map[string][]func(ctx context.Context, msg []byte) error)
 	inited = true
+	_ = ctx // reserved for backends that need ctx at init
 	return nil
+}
+
+// SetBackend installs an externally constructed Backend (e.g. a yongol-
+// generated postgres implementation). Use this from main.go after building
+// the backend from the user's sqlc Queries:
+//
+//	q := db.New(pool)
+//	queue.SetBackend(postgresqueue.NewPostgres(q))
+//
+// Handlers registered via Subscribe before SetBackend survive the swap.
+func SetBackend(b Backend) {
+	mu.Lock()
+	defer mu.Unlock()
+	backend = b
+	if handlers == nil {
+		handlers = make(map[string][]func(ctx context.Context, msg []byte) error)
+	}
+	inited = true
 }

@@ -31,7 +31,6 @@ allow if {
 func TestCheckClaim_StructWithJSONTags(t *testing.T) {
 	os.Unsetenv("DISABLE_AUTHZ")
 	globalPolicy = passthroughPolicy
-	globalDB = nil
 	globalOwnerships = nil
 	defer func() { globalPolicy = "" }()
 
@@ -48,7 +47,6 @@ func TestCheckClaim_StructWithJSONTags(t *testing.T) {
 func TestCheckClaim_PointerStruct(t *testing.T) {
 	os.Unsetenv("DISABLE_AUTHZ")
 	globalPolicy = passthroughPolicy
-	globalDB = nil
 	globalOwnerships = nil
 	defer func() { globalPolicy = "" }()
 
@@ -65,7 +63,6 @@ func TestCheckClaim_PointerStruct(t *testing.T) {
 func TestCheckClaim_NilDeniesWithClaimsRego(t *testing.T) {
 	os.Unsetenv("DISABLE_AUTHZ")
 	globalPolicy = passthroughPolicy
-	globalDB = nil
 	globalOwnerships = nil
 	defer func() { globalPolicy = "" }()
 

@@ -12,7 +12,7 @@ func TestMultipleSubscribers(t *testing.T) {
 	resetQueue()
 	ctx := context.Background()
 
-	if err := Init(ctx, "memory", nil); err != nil {
+	if err := Init(ctx, "memory"); err != nil {
 		t.Fatal(err)
 	}
 	defer Close()

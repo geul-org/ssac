@@ -14,12 +14,8 @@ import (
 // Logout revokes the supplied refresh token via RefreshStore.Revoke. It is
 // idempotent: an already-revoked, expired, or unknown token returns a nil
 // error. Intended as the `@call auth.Logout` target in SSaC for the
-// canonical POST /auth/logout endpoint (Phase009).
-//
-// The signature intentionally accepts RefreshStore *by pointer* so the same
-// instance wired into the Server struct (via block_auth_init) can be reused
-// without copying the DB handle.
-func Logout(ctx context.Context, store *RefreshStore, refreshToken string) (LogoutResponse, error) {
+// canonical POST /auth/logout endpoint.
+func Logout(ctx context.Context, store RefreshStore, refreshToken string) (LogoutResponse, error) {
 	if store == nil {
 		return LogoutResponse{}, errors.New("auth: refresh store not configured")
 	}
@@ -29,8 +25,6 @@ func Logout(ctx context.Context, store *RefreshStore, refreshToken string) (Logo
 		// to drop.
 		return LogoutResponse{Success: true}, nil
 	}
-	// Revoke is already an UPDATE WHERE revoked_at IS NULL, so replaying it
-	// on an already-revoked row is a no-op. Missing rows produce no error.
 	if err := store.Revoke(ctx, refreshToken); err != nil {
 		return LogoutResponse{}, err
 	}

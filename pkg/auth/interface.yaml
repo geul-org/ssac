@@ -1,0 +1,88 @@
+version: 1
+package: auth
+description: "JWT 발급/검증 + refresh token 회전 + 비밀번호 해싱. 순수 crypto (DB-free). refresh token 저장소는 yongol 이 interface.yaml 로부터 codegen."
+
+ports:
+  - name: LoginLookup
+    description: "email 로 사용자 조회 (password hash, claims 필드 포함) — Login 플로우의 canonical port"
+    when: always
+    used_by: [Login]
+    query:
+      cardinality: one
+      params:
+        - { name: email, type: string }
+      returns:
+        - { name: id, type: int64 }
+        - { name: password_hash, type: string }
+        - { name: claims, type: "[]byte" }
+
+  - name: RefreshTokenInsert
+    description: "신규 refresh token 행 저장 (sha256 해시 + JSONB claims)"
+    when: manifest.backend.auth.refresh.enabled
+    used_by: [RefreshRotate]
+    query:
+      cardinality: exec
+      params:
+        - { name: token_hash, type: string }
+        - { name: claims, type: "[]byte" }
+        - { name: expires_at, type: "time.Time" }
+
+  - name: RefreshTokenFindByHash
+    description: "hash 로 refresh token 행 조회 (Consume 의 SELECT 단계)"
+    when: manifest.backend.auth.refresh.enabled
+    used_by: [RefreshRotate, Logout]
+    query:
+      cardinality: one
+      params:
+        - { name: token_hash, type: string }
+      returns:
+        - { name: claims, type: "[]byte" }
+        - { name: expires_at, type: "time.Time" }
+        - { name: revoked_at, type: "*time.Time" }
+
+  - name: RefreshTokenRevoke
+    description: "refresh token 을 revoked 로 마킹 (idempotent — WHERE revoked_at IS NULL)"
+    when: manifest.backend.auth.refresh.enabled
+    used_by: [RefreshRotate, Logout]
+    query:
+      cardinality: exec
+      params:
+        - { name: token_hash, type: string }
+
+  - name: RefreshTokenRevokeAll
+    description: "matcher 와 일치하는 모든 활성 refresh token 을 revoked 로 마킹 (JSONB @> 연산)"
+    when: manifest.backend.auth.refresh.enabled
+    used_by: [RefreshRotate]
+    query:
+      cardinality: exec
+      params:
+        - { name: matcher, type: "[]byte" }
+
+canonical_ddl: |
+  CREATE TABLE refresh_tokens (
+      token_hash  TEXT        PRIMARY KEY,
+      claims      JSONB       NOT NULL,
+      expires_at  TIMESTAMPTZ NOT NULL,
+      revoked_at  TIMESTAMPTZ,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE INDEX refresh_tokens_claims_idx ON refresh_tokens USING GIN (claims);
+
+canonical_queries: |
+  -- name: LoginLookup :one
+  SELECT id, password_hash, claims FROM users WHERE email = @email;
+
+  -- name: RefreshTokenInsert :exec
+  INSERT INTO refresh_tokens (token_hash, claims, expires_at)
+  VALUES (@token_hash, @claims, @expires_at);
+
+  -- name: RefreshTokenFindByHash :one
+  SELECT claims, expires_at, revoked_at FROM refresh_tokens WHERE token_hash = @token_hash;
+
+  -- name: RefreshTokenRevoke :exec
+  UPDATE refresh_tokens SET revoked_at = NOW()
+  WHERE token_hash = @token_hash AND revoked_at IS NULL;
+
+  -- name: RefreshTokenRevokeAll :exec
+  UPDATE refresh_tokens SET revoked_at = NOW()
+  WHERE revoked_at IS NULL AND claims @> @matcher;

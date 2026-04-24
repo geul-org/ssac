@@ -1,30 +1,23 @@
 //ff:func feature=pkg-auth type=test control=sequence topic=auth-refresh
-//ff:what Logout idempotent 검증 — 미존재/이미 revoked token 도 nil error
+//ff:what Logout idempotent 검증 — 미존재/이미 revoked token 도 nil error (memoryRefreshStore 기반)
 package auth
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
-
-	sqlmock "github.com/DATA-DOG/go-sqlmock"
+	"time"
 )
 
 func TestLogout_IdempotentRevoke(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf("sqlmock: %v", err)
-	}
-	defer db.Close()
-
-	store := &RefreshStore{DB: db}
+	store := NewMemoryRefreshStore()
 	token := "plaintext.refresh.jwt"
+	claims, _ := json.Marshal(map[string]any{"user_id": int64(1)})
+	if err := store.Create(context.Background(), token, claims, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
 
-	// Revoke — UPDATE WHERE revoked_at IS NULL. Affected rows can be 0
-	// (already revoked) or 1 (newly revoked); both are no-error.
-	mock.ExpectExec(`UPDATE refresh_tokens SET revoked_at`).
-		WithArgs(hashRefreshToken(token)).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-
+	// First Logout revokes.
 	out, err := Logout(context.Background(), store, token)
 	if err != nil {
 		t.Fatalf("Logout: %v", err)
@@ -32,28 +25,24 @@ func TestLogout_IdempotentRevoke(t *testing.T) {
 	if !out.Success {
 		t.Fatalf("expected Success=true, got %+v", out)
 	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("expectations: %v", err)
+	// Second Logout on the same (now revoked) token is a no-op.
+	out, err = Logout(context.Background(), store, token)
+	if err != nil {
+		t.Fatalf("Logout idempotent: %v", err)
+	}
+	if !out.Success {
+		t.Fatalf("expected Success=true on idempotent logout, got %+v", out)
 	}
 }
 
 func TestLogout_EmptyTokenSilent(t *testing.T) {
-	// No DB calls expected — an empty token is a no-op.
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf("sqlmock: %v", err)
-	}
-	defer db.Close()
-
-	out, err := Logout(context.Background(), &RefreshStore{DB: db}, "")
+	store := NewMemoryRefreshStore()
+	out, err := Logout(context.Background(), store, "")
 	if err != nil {
 		t.Fatalf("Logout empty: %v", err)
 	}
 	if !out.Success {
 		t.Fatalf("empty token should still return Success=true, got %+v", out)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("expectations: %v", err)
 	}
 }
 

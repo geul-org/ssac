@@ -6,8 +6,7 @@ func resetQueue() {
 	mu.Lock()
 	inited = false
 	handlers = nil
-	backend = ""
-	db = nil
+	backend = nil
 	cancel = nil
 	done = nil
 	mu.Unlock()

@@ -11,7 +11,7 @@ func TestInitSkipsWithDisableAuthz(t *testing.T) {
 	os.Setenv("DISABLE_AUTHZ", "1")
 	defer os.Unsetenv("DISABLE_AUTHZ")
 
-	err := Init(nil, nil)
+	err := Init("", nil)
 	if err != nil {
 		t.Fatalf("expected no error with DISABLE_AUTHZ=1, got: %v", err)
 	}

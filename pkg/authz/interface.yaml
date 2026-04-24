@@ -1,0 +1,38 @@
+version: 1
+package: authz
+description: "OPA 기반 정책 평가 — DB-free. ownership lookup 은 caller 가 사전 로드해 CheckRequest.Owners 로 주입."
+
+# authz 의 port 는 *동적* 이다 — Rego @ownership 매핑 개수만큼 OwnerLookup<Resource> 쿼리가 필요.
+# yongol 이 Rego 를 파싱해 매핑을 추출한 뒤, 아래 meta 규칙에 따라 각 매핑마다 port 한 개씩 expand.
+#
+# 예: Rego 가
+#     # @ownership workflow: workflows.org_id
+#     # @ownership execution_log: execution_logs.org_id
+# 을 선언하면 yongol 은 다음 2 개 port 를 요구한다:
+#     OwnerLookupWorkflow, OwnerLookupExecutionLog
+#
+# 각 port 는 사용자가 specs/db/queries/<table>.sql 에 sqlc 쿼리로 제공해야 한다.
+# 누락 시 XAP-NN ERROR (Phase003).
+
+ports_meta:
+  rule: owner_lookup_per_ownership_mapping
+  description: "각 Rego @ownership 매핑마다 OwnerLookup<Resource> sqlc 쿼리 필요"
+  convention:
+    name: "OwnerLookup<Resource>"   # Resource 는 매핑 왼쪽 이름 PascalCase
+    cardinality: one
+    params:
+      - { name: id, type: int64 }   # 또는 DDL 에서 결정되는 PK 타입
+    returns:
+      - { name: owner_id, type: int64 }  # 또는 DDL 에서 결정되는 owner 컬럼 타입
+
+canonical_queries: |
+  -- 예시 1: 직접 매핑 (@ownership workflow: workflows.org_id)
+  -- name: OwnerLookupWorkflow :one
+  SELECT org_id FROM workflows WHERE id = @id;
+
+  -- 예시 2: via join 매핑 (@ownership lesson: courses.instructor_id via lessons.course_id)
+  -- name: OwnerLookupLesson :one
+  SELECT c.instructor_id
+  FROM courses c
+  JOIN lessons l ON l.course_id = c.id
+  WHERE l.id = @id;

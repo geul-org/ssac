@@ -1,5 +1,5 @@
 //ff:func feature=pkg-authz type=util control=sequence
-//ff:what OPA 정책을 평가하여 인가를 검사한다
+//ff:what OPA 정책을 평가하여 인가를 검사한다 — owners 는 caller 가 주입
 package authz
 
 import (
@@ -16,6 +16,13 @@ import (
 //
 // req.Claim is passed through to OPA as the `claims` object. A nil Claim is
 // normalized to an empty map so rego never observes `null`.
+//
+// req.Owners is the caller-populated ownership lookup. Typically the handler
+// runs a yongol-generated `OwnerLookup<Resource>` sqlc query under the
+// request's pgx.Tx before calling Check, then places the result into
+// `req.Owners[resource][resourceID] = ownerID`. Both keys and values are
+// strings so the rego policy can compare `data.owners.<resource>[id] ==
+// input.claims.user_id` without caring about column types.
 func Check(req CheckRequest) (CheckResponse, error) {
 	if os.Getenv("DISABLE_AUTHZ") == "1" {
 		return CheckResponse{}, nil
@@ -31,10 +38,9 @@ func Check(req CheckRequest) (CheckResponse, error) {
 		ctx = context.Background()
 	}
 
-	// Build data.owners by querying DB for matching ownership mappings.
-	owners, err := loadOwners(ctx, req)
-	if err != nil {
-		return CheckResponse{}, fmt.Errorf("load owners: %w", err)
+	owners := req.Owners
+	if owners == nil {
+		owners = map[string]map[string]string{}
 	}
 
 	var claims any = req.Claim
@@ -48,7 +54,9 @@ func Check(req CheckRequest) (CheckResponse, error) {
 		"resource_id": req.ResourceID,
 	}
 
-	// Build in-memory store with owners data for OPA evaluation.
+	// Build in-memory store with owners data for OPA evaluation. The owners
+	// map is a nested `map[resource]map[resourceID]ownerID` so rego can
+	// dereference `data.owners.<resource>[input.resource_id]`.
 	store := inmem.NewFromObject(map[string]any{
 		"owners": owners,
 	})

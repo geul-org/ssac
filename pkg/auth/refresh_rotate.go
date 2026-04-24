@@ -20,17 +20,19 @@ import (
 //
 // Steps:
 //  1. VerifyToken — cryptographic signature + expiry check on the input JWT.
-//  2. store.Consume — atomic SELECT + UPDATE revoked_at, returning the row's
-//     raw claims JSON. Reuse surfaces as ErrRefreshTokenReused; when the
-//     store has DetectReuseLogoutAll enabled, every active token sharing the
-//     same claim set is revoked before the error propagates.
+//  2. store.Consume — atomic "revoke + return claims". Reuse surfaces as
+//     ErrRefreshTokenReused; when `detectReuseLogoutAll` is true, every active
+//     token sharing the same claim set is revoked before the error propagates.
 //  3. IssueToken + RefreshToken — new access+refresh pair carrying the
 //     claims unchanged.
 //  4. store.Create — persist the new refresh row under the same claims.
 //
 // The function never decodes claims; they are passed verbatim through
 // json.RawMessage so this helper stays claim-schema-agnostic.
-func RefreshRotate(ctx context.Context, store *RefreshStore, refreshToken string) (RefreshRotateResponse, error) {
+//
+// detectReuseLogoutAll is passed explicitly rather than living on the store
+// implementation because the reuse-policy is orthogonal to persistence.
+func RefreshRotate(ctx context.Context, store RefreshStore, refreshToken string, detectReuseLogoutAll bool) (RefreshRotateResponse, error) {
 	if store == nil {
 		return RefreshRotateResponse{}, errors.New("auth: refresh store not configured")
 	}
@@ -38,16 +40,16 @@ func RefreshRotate(ctx context.Context, store *RefreshStore, refreshToken string
 		return RefreshRotateResponse{}, errors.New("auth: empty refresh token")
 	}
 
-	// 1) Cryptographic verification before touching the DB.
+	// 1) Cryptographic verification before touching the store.
 	if _, err := VerifyToken(VerifyTokenRequest{Token: refreshToken}); err != nil {
 		return RefreshRotateResponse{}, fmt.Errorf("auth: verify refresh token: %w", err)
 	}
 
 	// 2) Atomic consume (one-time-use). Reuse attempts return the revoked
-	// row's claims so DetectReuseLogoutAll can scope the family lockout.
+	// row's claims so family-lockout can be scoped.
 	claimsRaw, err := store.Consume(ctx, refreshToken)
 	if errors.Is(err, ErrRefreshTokenReused) {
-		if store.DetectReuseLogoutAll && len(claimsRaw) > 0 {
+		if detectReuseLogoutAll && len(claimsRaw) > 0 {
 			var matcher ClaimMatcher
 			if decodeErr := json.Unmarshal(claimsRaw, &matcher); decodeErr == nil && len(matcher) > 0 {
 				_ = store.RevokeAll(ctx, matcher)
