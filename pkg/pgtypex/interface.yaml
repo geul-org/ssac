@@ -1,0 +1,7 @@
+version: 1
+package: pgtypex
+description: "OpenAPI 타입 (runtime/types, time.Time, string, int64, …) ↔ sqlc pgx/v5 pgtype wrapper (pgtype.UUID, pgtype.Timestamptz, …) 의 결정론적 양방향 변환 헬퍼. 스키마 무관 · 프로젝트 결정 없음. yongol SSaC emit 이 request → sqlc 인자 / sqlc row → response 두 사이트에서 본 패키지를 import 한다."
+
+# 본 패키지는 query port 를 노출하지 않는다 (DB-free 변환 layer).
+# auth / cache / queue 와 달리 ports 항목은 비어 있다.
+ports: []
