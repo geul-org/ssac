@@ -9,7 +9,7 @@ func TestCheckRequestFields(t *testing.T) {
 	req := CheckRequest{
 		Action:     "AcceptProposal",
 		Resource:   "gig",
-		ResourceID: 99,
+		ResourceID: "99",
 		Claim:      claim,
 	}
 	if req.Action != "AcceptProposal" {
@@ -18,7 +18,7 @@ func TestCheckRequestFields(t *testing.T) {
 	if req.Resource != "gig" {
 		t.Fatal("Resource mismatch")
 	}
-	if req.ResourceID != 99 {
+	if req.ResourceID != "99" {
 		t.Fatal("ResourceID mismatch")
 	}
 	got, ok := req.Claim.(map[string]any)

@@ -34,7 +34,7 @@ type CheckRequest struct {
 	Ctx        context.Context
 	Action     string
 	Resource   string
-	ResourceID int64
+	ResourceID string
 	Claim      any
 	Owners     map[string]map[string]any
 }
